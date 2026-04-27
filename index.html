@@ -210,6 +210,7 @@
       <b style="color:var(--accent)">Power:</b> &nbsp;<code>x^2</code> &nbsp;·&nbsp;
       Press <kbd style="background:var(--btn);border:1px solid var(--border);border-radius:3px;padding:1px 5px;font-size:10px">↩</kbd> to insert result into editor , Create functions: f(x,n) = x^n · <b style="color:var(--accent2)">Symbolic:</b> diff(3x^2,x) · integrate(x^2,x) · solve(x^2-4,x) · factor(x^2-4) · <b style="color:var(--accent2)">Matrix:</b> A=[[1,2],[3,4]] · det(A) · inv(A) · A*B
       <button class="hbtn" onclick="hideGraph()">Hide Graph</button>
+      <button class="hbtn" onclick="resetGraphZoom()">🔍 Reset Zoom</button>
       <div id="calc-custom-list" class="custom-fn-container"></div>
     </div>
   </div>
@@ -245,6 +246,9 @@
 <!-- Hidden file input for import -->
 <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(event)">
 
+
+
+
 <script src="js/Library/math.js"></script>
 <script src="js/Library/nerdamer.core.js"></script>
 <script src="js/Library/Algebra.js"></script>
@@ -258,5 +262,7 @@
 <script src="js/calculator.js"></script>
 <script src="js/dataLab.js"></script>
 <script src="js/app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 </body>
 </html>
