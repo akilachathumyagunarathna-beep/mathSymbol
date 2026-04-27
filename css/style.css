@@ -270,3 +270,22 @@ body{
 .custom-fn-container { margin-top: 15px; padding: 10px; border-top: 1px solid #333; }
 .custom-fn-item { display: flex; justify-content: space-between; background: #1e1e26; padding: 5px 10px; margin-bottom: 5px; border-radius: 4px; font-family: monospace; }
 .custom-fn-item button { background: none; border: none; color: #ff5555; cursor: pointer; font-weight: bold; }
+
+/* Matrix & Symbolic results */
+.calc-res.matrix {
+  white-space: pre;
+  text-align: left;
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 4px 8px;
+  background: var(--surf2);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  min-width: 120px;
+}
+.calc-res.sym {
+  color: var(--accent);
+  font-style: italic;
+  font-size: 12px;
+  text-align: left;
+}
