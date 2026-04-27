@@ -443,6 +443,39 @@ function calcSymbolic(expr) {
       return 'x = ' + result.toString();
     }
 
+    // Binary ↔ Decimal conversion
+const binToDecMatch = expr.match(/^bin\(([01]+)\)$/i);
+if (binToDecMatch) {
+  return '= ' + parseInt(binToDecMatch[1], 2).toString();
+}
+
+const decToBinMatch = expr.match(/^dec\((\d+)\)$/i);
+if (decToBinMatch) {
+  return '= ' + parseInt(decToBinMatch[1]).toString(2);
+}
+
+// Hex conversion
+const hexToDecMatch = expr.match(/^hex\(([0-9a-fA-F]+)\)$/i);
+if (hexToDecMatch) {
+  return '= ' + parseInt(hexToDecMatch[1], 16).toString();
+}
+
+const decToHexMatch = expr.match(/^tohex\((\d+)\)$/i);
+if (decToHexMatch) {
+  return '= ' + parseInt(decToHexMatch[1]).toString(16).toUpperCase();
+}
+
+// Octal conversion
+const octToDecMatch = expr.match(/^oct\(([0-7]+)\)$/i);
+if (octToDecMatch) {
+  return '= ' + parseInt(octToDecMatch[1], 8).toString();
+}
+
+const decToOctMatch = expr.match(/^tooct\((\d+)\)$/i);
+if (decToOctMatch) {
+  return '= ' + parseInt(decToOctMatch[1]).toString(8);
+}
+
     return null; // Symbolic නෙමෙයි
   } catch(e) {
     return null;
