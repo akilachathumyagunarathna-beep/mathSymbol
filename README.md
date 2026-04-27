@@ -1,17 +1,17 @@
-<<<<<<< HEAD
 # ✍️ SymbolWriter
 
-> A browser-based rich text editor with a built-in symbol library, scientific calculator, and spreadsheet engine — built as a first project using AI-assisted learning.
+> A browser-based writing tool with 150+ math & science symbol shortcuts, a scientific calculator with graphing, symbolic calculus, matrix operations, and an Excel-like Data Lab — all offline. Built with vanilla JavaScript as a first project using AI-assisted learning.
 
 ![SymbolWriter Banner](https://img.shields.io/badge/SymbolWriter-v2.0-a78bfa?style=for-the-badge&logo=javascript&logoColor=white)
 ![Status](https://img.shields.io/badge/status-active-34d399?style=for-the-badge)
 ![License](https://img.shields.io/badge/license-MIT-60a5fa?style=for-the-badge)
+![Offline](https://img.shields.io/badge/works-offline-a78bfa?style=for-the-badge)
 
 ---
 
 ## 🌟 What is SymbolWriter?
 
-SymbolWriter is a feature-rich browser-based writing tool designed for students, researchers, and anyone who works with mathematical or scientific notation. It combines a rich text editor, a symbol shortcut system, a scientific calculator, and a spreadsheet — all in one place, with no installation required.
+SymbolWriter is a feature-rich browser-based writing tool designed for students, researchers, and anyone who works with mathematical or scientific notation. It combines a rich text editor, a symbol shortcut system, a scientific calculator, and a spreadsheet — all in one place, with no installation required and fully offline capable.
 
 ---
 
@@ -36,16 +36,27 @@ SymbolWriter is a feature-rich browser-based writing tool designed for students,
 - Multi-row calculation with variable support (`x = 10`, `2*x`)
 - Define and save **custom functions** (`bmi(w,h) = w/h^2`)
 - Function graphing with Chart.js
+- **Matrix operations** — `det(A)`, `inv(A)`, `transpose(A)`, `A*B`
+- **Symbolic calculus** (Nerdamer.js):
+  - Differentiation: `diff(3*x^2, x)` → `6x`
+  - Integration: `integrate(x^2, x)` → `x^3/3 + C`
+  - Equation solving: `solve(x^2-4, x)` → `[2, -2]`
+  - Factorization: `factor(x^2-4)` → `(x-2)(x+2)`
 - Insert results directly into the editor
 
 ### 📊 Data Lab (Spreadsheet Engine)
 - Excel-like spreadsheet with 50+ built-in functions (`SUM`, `AVG`, `VLOOKUP`, `IF`, etc.)
 - Use your custom calculator functions directly in cells (`=bmi(70, 1.75)`)
+- Nested functions: `=SUM(bmi(70,1.75), 10)`
 - Formula autocomplete with suggestions
 - Multiple chart types (Bar, Line, Pie, Scatter, Radar, and more)
 - Sort, filter, find & replace
 - Export to CSV and Excel
-- Multiple data types: Currency (USD, LKR, EUR), Percentage, Date, Boolean
+
+### 📱 Mobile Responsive
+- Touch-friendly interface with larger tap targets
+- Horizontal scrolling toolbars on small screens
+- Quick-access bottom toolbar on mobile
 
 ---
 
@@ -61,13 +72,8 @@ SymbolWriter is a feature-rich browser-based writing tool designed for students,
 2. Right-click `index.html` → **Open with Live Server**
 
 ```bash
-# Clone the repository
-git clone https://github.com/YOUR_USERNAME/SymbolWriter.git
-
-# Open the folder
+git clone https://github.com/akilachathumyagunarathna-beep/SymbolWriter.git
 cd SymbolWriter
-
-# Open index.html in your browser
 ```
 
 ---
@@ -75,23 +81,36 @@ cd SymbolWriter
 ## 🎯 How to Use
 
 ### Symbol Shortcuts
-Type a `/` followed by the symbol name anywhere in the editor:
 ```
-/alpha  →  α
-/sum    →  ∑
-/sqrt   →  √
-/right  →  →
-/1/2    →  ½
+/alpha  →  α      /sum  →  ∑      /sqrt  →  √
+/right  →  →      /1/2  →  ½      /pi    →  π
 ```
 
-### Calculator Custom Functions
-In the Calculator panel, define a function:
+### Calculator — Custom Functions
 ```
 bmi(w, h) = w / h^2
+bmi(70, 1.75)              →   22.86
 ```
-Then use it directly in the Data Lab:
+
+### Calculator — Symbolic Calculus
 ```
-=bmi(70, 1.75)   →   22.86
+diff(3*x^2, x)             →   6x
+integrate(x^2, x)          →   x^3/3 + C
+solve(x^2-4, x)            →   [2, -2]
+factor(x^2-4)              →   (x-2)(x+2)
+```
+
+### Calculator — Matrix
+```
+A = [[1,2],[3,4]]
+det(A)                     →   -2
+inv(A)                     →   [[-2,1],[1.5,-0.5]]
+```
+
+### Data Lab — Using Custom Functions
+```
+=bmi(70, 1.75)             →   22.86
+=SUM(bmi(70,1.75), 10)     →   32.86
 ```
 
 ---
@@ -100,16 +119,24 @@ Then use it directly in the Data Lab:
 
 ```
 SymbolWriter/
-├── index.html          # Main HTML file
+├── index.html
+├── css/
+│   └── style.css
 ├── js/
-│   ├── symbols.js      # Built-in symbol library
-│   ├── editor.js       # Rich text editor logic
-│   ├── calculator.js   # Calculator & custom functions
-│   ├── dataLab.js      # Spreadsheet engine
-│   ├── custom.js       # Custom symbol management
-│   ├── wordcopy.js     # Export & clipboard features
-│   ├── chart.js        # Chart helpers
-│   └── app.js          # App initialization
+│   ├── Library/
+│   │   ├── math.js
+│   │   ├── chart.js
+│   │   ├── nerdamer.core.js
+│   │   ├── Algebra.js
+│   │   ├── Calculus.js
+│   │   └── Solve.js
+│   ├── symbols.js
+│   ├── editor.js
+│   ├── calculator.js
+│   ├── dataLab.js
+│   ├── custom.js
+│   ├── wordcopy.js
+│   └── app.js
 └── README.md
 ```
 
@@ -120,7 +147,8 @@ SymbolWriter/
 | Technology | Purpose |
 |---|---|
 | Vanilla JavaScript | Core logic |
-| [Math.js](https://mathjs.org/) | Formula evaluation & custom functions |
+| [Math.js](https://mathjs.org/) | Formula evaluation, matrix, custom functions |
+| [Nerdamer.js](https://nerdamer.com/) | Symbolic calculus (diff, integrate, solve) |
 | [Chart.js](https://www.chartjs.org/) | Graphs & data visualization |
 | HTML5 ContentEditable | Rich text editor |
 | localStorage | Data persistence |
@@ -133,20 +161,21 @@ This was my first programming project, built with the help of AI (Claude by Anth
 
 - How to structure a JavaScript project across multiple files
 - How to use `localStorage` for data persistence
-- How to integrate third-party libraries (Math.js, Chart.js)
+- How to integrate third-party libraries (Math.js, Chart.js, Nerdamer)
 - How to debug using browser DevTools and console
-- How ES Modules and script loading order works
+- How script loading order and global scope works in JavaScript
 - How to iteratively build and improve features
+- How to use Git and GitHub for version control
 
 ---
 
 ## 📌 Future Improvements
 
-- [ ] Mobile responsive design
-- [ ] Dark/Light theme toggle improvements
-- [ ] More chart customization options
-- [ ] Collaborative editing (backend)
-- [ ] Sinhala language UI option
+- [ ] Auto-save with localStorage
+- [ ] Document templates (Math report, Science lab)
+- [ ] Multi-sheet Data Lab support
+- [ ] AI formula helper
+- [ ] PWA — install as offline app
 
 ---
 
@@ -161,7 +190,3 @@ Made with ❤️ and a lot of curiosity.
 ## 📄 License
 
 This project is open source under the [MIT License](LICENSE).
-=======
-# SymbolWriter
-A browser-based writing tool with 150+ math/science symbol shortcuts, scientific calculator with custom functions, and an Excel-like spreadsheet engine. Built with vanilla JavaScript, Math.js and Chart.js — my first project as a beginner using AI-assisted learning.
->>>>>>> f71049cf8d5a0dc2f0db2d37fe0de442cc797afb
