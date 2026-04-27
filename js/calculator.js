@@ -237,30 +237,72 @@ function calcRenderBadges(){
 function calcInsertResult(i){
   const ins = document.getElementById('calc-ins-'+i);
   if(!ins || !ins.dataset.val) return;
-  if(typeof insertSym === 'function') {
-      insertSym(ins.dataset.val);
+  const val = ins.dataset.val;
+  // Multi-line (matrix) නම් clipboard copy
+  if(val.includes('\n')){
+    navigator.clipboard?.writeText(val).then(()=>{
+      if(typeof toast === 'function') toast('Matrix copied to clipboard!','success');
+    });
+  } else {
+    if(typeof insertSym === 'function') {
+      insertSym(val);
       if(typeof toast === 'function') toast('Result inserted into editor','success');
+    }
   }
 }
 
 // ── GRAPHING FUNCTION (Chart.js) ──
 
 function calcDrawGraph(i) {
-    const inp = document.getElementById('calc-inp-'+i).value;
-    let canvasWrap = document.getElementById('graphCanvasWrap');
+    const inp = document.getElementById('calc-inp-'+i).value.trim();
+    if(!inp) return;
 
+    let canvasWrap = document.getElementById('graphCanvasWrap');
     if(!canvasWrap) {
         canvasWrap = document.createElement('div');
         canvasWrap.id = 'graphCanvasWrap';
-        canvasWrap.style = "width:100%; height:300px; padding:10px; background:var(--surf2); border-radius:8px; margin-top:15px; border:1px solid var(--border);";
-        
+        canvasWrap.style = "width:100%; height:320px; padding:10px; background:var(--surf2); border-radius:8px; margin-top:15px; border:1px solid var(--border);";
+        const closeBtn = document.createElement('button');
+        closeBtn.textContent = '✕ Clear All';
+        closeBtn.className = 'hbtn';
+        closeBtn.style = 'position:absolute;right:16px;top:8px;font-size:10px;';
+        closeBtn.onclick = hideGraph;
+        canvasWrap.style.position = 'relative';
+        canvasWrap.appendChild(closeBtn);
         let canvas = document.createElement('canvas');
         canvas.id = 'graphCanvas';
         canvasWrap.appendChild(canvas);
         document.getElementById('calc-rows').after(canvasWrap);
     }
-    
     canvasWrap.style.display = 'block';
+
+    // Colors list
+    const COLORS = [
+    '#a78bfa', // Purple
+    '#34d399', // Green
+    '#f87171', // Red
+    '#60a5fa', // Blue
+    '#fbbf24', // Amber
+    '#f472b6', // Pink
+    '#38bdf8', // Sky Blue
+    '#4ade80', // Light Green
+    '#fb923c', // Orange
+    '#e879f9', // Fuchsia
+    '#a3e635', // Lime
+    '#22d3ee', // Cyan
+    '#f43f5e', // Rose
+    '#818cf8', // Indigo
+    '#2dd4bf', // Teal
+    '#facc15', // Yellow
+    '#c084fc', // Violet
+    '#86efac', // Mint
+    '#fda4af', // Light Red
+    '#93c5fd', // Light Blue
+    '#6ee7b7', // Light Teal
+    '#fcd34d', // Light Amber
+    '#d8b4fe', // Light Purple
+    '#f9a8d4', // Light Pink
+];
 
     try {
         let cleanExpr = inp.toLowerCase().replace(/(\d)(x)/gi, '$1*$2');
@@ -268,10 +310,7 @@ function calcDrawGraph(i) {
 
         let labels = [];
         let dataPoints = [];
-
-        // Generate coordinates (-10 සිට 10 දක්වා)
         for (let x = -10; x <= 10; x += 0.5) {
-            // calcVars ලබා දීමෙන් සේව් කර ඇති custom functions ද ග්‍රාෆ් වල වැඩ කරයි
             let y = compiledCode.evaluate({ ...calcVars, x: x });
             if (typeof y === 'number' && isFinite(y)) {
                 labels.push(x);
@@ -279,50 +318,67 @@ function calcDrawGraph(i) {
             }
         }
 
-        if (calcChartInstance) calcChartInstance.destroy();
+        const newDataset = {
+            label: 'f(x) = ' + inp,
+            data: dataPoints,
+            borderColor: COLORS[(calcChartInstance ? calcChartInstance.data.datasets.length : 0) % COLORS.length],
+            backgroundColor: 'transparent',
+            borderWidth: 2.5,
+            fill: false,
+            tension: 0.4,
+            pointRadius: 0,
+            pointHoverRadius: 6
+        };
 
-        calcChartInstance = new Chart(document.getElementById('graphCanvas').getContext('2d'), {
-            type: 'line',
-            data: {
-                labels: labels,
-                datasets: [{
-                    label: 'f(x) = ' + inp,
-                    data: dataPoints,
-                    borderColor: '#a78bfa', // var(--accent)
-                    backgroundColor: 'rgba(167,139,250,0.1)',
-                    borderWidth: 2.5,
-                    fill: true,
-                    tension: 0.4,
-                    pointRadius: 0,
-                    pointHoverRadius: 6
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {
-                    x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#888' } },
-                    y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#888' } }
-                },
-                plugins: {
-                    legend: { labels: { color: '#e2e8f0', font: { family: "'JetBrains Mono', monospace" } } },
-                    tooltip: { mode: 'index', intersect: false }
-                }
-            }
-        });
+        if(calcChartInstance) {
+            // පරන chart එකට නව dataset add කිරීම
+            calcChartInstance.data.datasets.push(newDataset);
+            calcChartInstance.update();
+            if(typeof toast === 'function') toast('Added: f(x) = ' + inp, 'success');
+        } else {
+            // අලුත් chart හදීම
+            calcChartInstance = new Chart(
+                document.getElementById('graphCanvas').getContext('2d'), {
+                type: 'line',
+                data: { labels: labels, datasets: [newDataset] },
+                options: {
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  scales: {
+                      x: { grid:{color:'rgba(255,255,255,0.05)'}, ticks:{color:'#888'} },
+                      y: { grid:{color:'rgba(255,255,255,0.05)'}, ticks:{color:'#888'} }
+                  },
+                  plugins: {
+                      legend: { labels:{ color:'#e2e8f0', font:{family:"'JetBrains Mono',monospace"} } },
+                      tooltip: { mode:'index', intersect:false },
+                      zoom: {
+                          zoom: {
+                              wheel: { enabled: true },      // mouse scroll zoom
+                              pinch: { enabled: true },       // mobile pinch zoom
+                              mode: 'xy'
+                          },
+                              pan: {
+                                  enabled: true,
+                                  mode: 'xy'
+                              }
+                          }
+                      }
+                  }
+            });
+            if(typeof toast === 'function') toast('Graph drawn!', 'success');
+        }
 
-        if(typeof toast === 'function') toast("Graph drawn successfully", "success");
-    } catch (e) {
-        if(typeof toast === 'function') toast("Cannot draw graph. Check your expression.", "error");
+    } catch(e) {
+        if(typeof toast === 'function') toast('Cannot draw graph. Check expression.', 'error');
     }
 }
 
 function hideGraph() {
     const canvasWrap = document.getElementById('graphCanvasWrap');
-    if (canvasWrap) {
+    if(canvasWrap) {
         canvasWrap.style.display = 'none';
-        if (calcChartInstance) calcChartInstance.destroy();
-        if (typeof toast === 'function') toast("Graph hidden", "info");
+        if(calcChartInstance){ calcChartInstance.destroy(); calcChartInstance = null; }
+        if(typeof toast === 'function') toast('Graph cleared', 'info');
     }
 }
 
@@ -405,4 +461,11 @@ function calcFmtMatrix(result) {
   } catch {
     return String(result);
   }
+}
+
+function resetGraphZoom() {
+    if(calcChartInstance) {
+        calcChartInstance.resetZoom();
+        if(typeof toast === 'function') toast('Zoom reset!', 'info');
+    }
 }
