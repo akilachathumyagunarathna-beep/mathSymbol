@@ -41,13 +41,8 @@
       <option value="28">28px</option>
       <option value="36">36px</option>
     </select>
-    <select class="tsel" onchange="applyFF(this.value)" title="Font family">
-      <option value="'Syne',sans-serif">Sans</option>
-      <option value="'Georgia',serif">Serif</option>
-      <option value="'JetBrains Mono',monospace">Mono</option>
-      <option value="'Times New Roman',serif">Times</option>
-      <option value="'Arial',sans-serif">Arial</option>
-    </select>
+        <!-- Font selector -->
+    <select id="fontSel" class="tsel" title="Font"></select>
     <select class="tsel" onchange="applyLineHeight(this.value)" title="Line spacing">
       <option value="1.4">1.4×</option>
       <option value="1.8" selected>1.8×</option>
@@ -83,6 +78,8 @@
     <button class="tbtn" onclick="insertHR()" title="Divider">── HR</button>
     <button class="tbtn" onclick="insertCode()" title="Code block">&lt;/&gt; Code</button>
     <button class="tbtn" onclick="insertTable()" title="Insert table">⊞ Table</button>
+    <!-- Line delete button -->
+    <button id="btn-deleteLine" class="hbtn" title="Delete Line">🗑 Line</button>
     <div class="sep"></div>
     <select class="tsel" onchange="applyHeading(this.value)" id="headSel" title="Heading style">
       <option value="">Normal</option>
