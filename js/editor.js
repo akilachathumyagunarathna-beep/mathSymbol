@@ -36,6 +36,136 @@ function insertSym(sym){
   hideSug(); updateStats();
 }
 
+// ── AUTO BRACKET PAIRS ──
+// ( → ( | )   { → { | }   [ → [ | ]   " → " | "   ' → ' | '
+const BRACKET_PAIRS = {
+  '(': ')',
+  '{': '}',
+  '[': ']',
+  '"': '"',
+  "'": "'",
+};
+
+function handleBracketPair(e) {
+  const opener = e.key;
+  const closer = BRACKET_PAIRS[opener];
+  if (!closer) return false;
+
+  e.preventDefault();
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return true;
+
+  const range = sel.getRangeAt(0);
+  const selectedText = range.toString();
+
+  // Selected text ඇත්නම් — wrap කරන්න
+  if (selectedText) {
+    range.deleteContents();
+    const wrapped = document.createTextNode(opener + selectedText + closer);
+    range.insertNode(wrapped);
+    // cursor end of inserted text
+    const newRange = document.createRange();
+    newRange.setStartAfter(wrapped);
+    newRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
+    updateStats();
+    return true;
+  }
+
+  // Selected text නැත — pair insert, cursor middle
+  // opener + closer insert කරලා cursor middle
+  const pair = document.createTextNode(opener + closer);
+  range.insertNode(pair);
+
+  // cursor opener ට පස්සෙ / closer ට කලින් — offset = 1
+  const cursorRange = document.createRange();
+  cursorRange.setStart(pair, 1);
+  cursorRange.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(cursorRange);
+
+  updateStats();
+  return true;
+}
+
+// Closing bracket ටයිප් කළ විට skip (already there)
+function handleClosingBracket(e) {
+  const closers = new Set([')', '}', ']']);
+  if (!closers.has(e.key)) return false;
+
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return false;
+  const range = sel.getRangeAt(0);
+  const node = range.startContainer;
+  if (node.nodeType !== 3) return false;
+
+  // cursor ට right side character check
+  const afterCursor = node.textContent[range.startOffset];
+  if (afterCursor === e.key) {
+    e.preventDefault();
+    // cursor move right by 1
+    const newRange = document.createRange();
+    newRange.setStart(node, range.startOffset + 1);
+    newRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
+    return true;
+  }
+  return false;
+}
+
+// ── PER-LINE DELETE ──
+// Ctrl+Shift+K හෝ Ctrl+D — current line delete
+function deleteCurrentLine() {
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return;
+  
+  // contenteditable div — block element find
+  let node = sel.getRangeAt(0).startContainer;
+  
+  // Text node නම් parent find
+  if (node.nodeType === 3) node = node.parentNode;
+  
+  // ed ට direct child div/p/br block find
+  let block = node;
+  while (block && block.parentNode !== ed) {
+    block = block.parentNode;
+  }
+  
+  if (block && block !== ed) {
+    block.remove();
+    updateStats();
+    setAct('Line deleted');
+    return;
+  }
+  
+  // Flat text nodes (no block wrapper) — selection range delete
+  const range = sel.getRangeAt(0);
+  const fullText = ed.innerText;
+  const preText = getTextBeforeCursor();
+  const lineStart = preText.lastIndexOf('\n') + 1;
+  const lineEndRaw = fullText.indexOf('\n', preText.length);
+  const lineEnd = lineEndRaw === -1 ? fullText.length : lineEndRaw;
+  
+  // execCommand select-delete
+  document.execCommand('selectAll', false, null);
+  const beforeLine = fullText.substring(0, lineStart);
+  const afterLine = fullText.substring(lineEnd + 1);
+  ed.innerText = beforeLine + afterLine;
+  updateStats();
+  setAct('Line deleted');
+}
+
+function getTextBeforeCursor() {
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return '';
+  const range = document.createRange();
+  range.selectNodeContents(ed);
+  range.setEnd(sel.getRangeAt(0).startContainer, sel.getRangeAt(0).startOffset);
+  return range.toString();
+}
+
 // ── SUGGESTIONS ──
 function showSug(query, node, off, si){
   matches=Object.keys(SM).filter(k=>k.startsWith(query)&&query.length>1);
@@ -63,7 +193,6 @@ function showSug(query, node, off, si){
     sugBox.appendChild(d);
   });
   sugBox.style.display='block';
-  // Position near cursor
   const rect=ed.getBoundingClientRect();
   sugBox.style.top=(ed.offsetTop+32)+'px';
   sugBox.style.left='26px';
@@ -78,7 +207,7 @@ ed.addEventListener('input',()=>{
   const q=getQuery();
   if(q)showSug(q.q,q.node,q.off,q.si); else hideSug();
 
-  // = sign formula hint (editor status bar එකේ පෙන්වයි)
+  // = sign formula hint
   const selNode = window.getSelection();
   if (selNode.rangeCount) {
     const node2 = selNode.getRangeAt(0).startContainer;
@@ -93,13 +222,22 @@ ed.addEventListener('input',()=>{
       }
     }
   }
-
 });
-
-
 
 ed.addEventListener('keydown',e=>{
   updateBtns();
+
+  // ── Auto bracket pairs (opener keys) ──
+  if (BRACKET_PAIRS[e.key] && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (handleBracketPair(e)) return;
+  }
+
+  // ── Closing bracket skip ──
+  if (!e.ctrlKey && !e.metaKey) {
+    if (handleClosingBracket(e)) return;
+  }
+
+  // ── Suggestion navigation ──
   if(sugBox.style.display==='block'){
     const items=sugBox.querySelectorAll('.sug-item');
     if(e.key==='ArrowDown'){e.preventDefault();selIdx=Math.min(selIdx+1,items.length-1);hilite();return}
@@ -110,6 +248,7 @@ ed.addEventListener('keydown',e=>{
     }
     if(e.key==='Escape'){hideSug();return}
   }
+
   if(e.key==='Tab'){e.preventDefault();document.execCommand('insertText',false,'  ');}
 });
 
@@ -130,12 +269,15 @@ document.addEventListener('keydown',e=>{
     if(e.shiftKey&&e.key==='C'){e.preventDefault();copyForWord();}
     if(e.key==='h'&&!e.shiftKey){e.preventDefault();openFindReplace();}
     if(e.key==='f'){/* allow browser find */}
+    // Ctrl+Shift+K — delete current line
+    if(e.shiftKey&&e.key==='K'){e.preventDefault();deleteCurrentLine();}
+    // Ctrl+D — delete current line (alternate)
+    if(!e.shiftKey&&e.key==='d'){e.preventDefault();deleteCurrentLine();}
   }
 });
 
 ed.addEventListener('paste',e=>{
   e.preventDefault();
-  // Try to paste rich text if available
   const html=e.clipboardData.getData('text/html');
   const plain=e.clipboardData.getData('text/plain');
   if(html){
@@ -237,7 +379,6 @@ function updateStats(){
   document.getElementById('wc').textContent=words;
   document.getElementById('cc').textContent=chars;
   document.getElementById('lc').textContent=lines;
-  // Update wc panel if open
   updateWCPanel(t,words,chars,lines);
 }
 
