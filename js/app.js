@@ -21,6 +21,112 @@ function togglePanel(name){
   if(!wasOpen) target.classList.add('open');
 }
 
+// ── FONT SELECTOR SETUP ──
+// Normal fonts මුලට — then special/mono fonts
+// HTML toolbar font-family dropdown populate කිරීම
+function setupFontSelector(){
+  const sel = document.getElementById('fontSel');
+  if(!sel) return;
+
+  // ── Font groups — normal/body fonts FIRST ──
+  const fontGroups = [
+    {
+      label: '— Normal Fonts —',
+      fonts: [
+        { label: 'Default (Sans)', value: '' },
+        { label: 'Arial', value: 'Arial, sans-serif' },
+        { label: 'Georgia', value: 'Georgia, serif' },
+        { label: 'Times New Roman', value: '"Times New Roman", Times, serif' },
+        { label: 'Calibri', value: 'Calibri, sans-serif' },
+        { label: 'Verdana', value: 'Verdana, sans-serif' },
+        { label: 'Trebuchet MS', value: '"Trebuchet MS", sans-serif' },
+        { label: 'Palatino', value: '"Palatino Linotype", Palatino, serif' },
+        { label: 'Tahoma', value: 'Tahoma, sans-serif' },
+      ]
+    },
+    {
+      label: '— Monospace —',
+      fonts: [
+        { label: 'JetBrains Mono', value: '"JetBrains Mono", monospace' },
+        { label: 'Courier New', value: '"Courier New", Courier, monospace' },
+        { label: 'Consolas', value: 'Consolas, monospace' },
+        { label: 'Source Code Pro', value: '"Source Code Pro", monospace' },
+      ]
+    },
+    {
+      label: '— Display / Stylized —',
+      fonts: [
+        { label: 'Impact', value: 'Impact, "Arial Narrow", sans-serif' },
+        { label: 'Comic Sans MS', value: '"Comic Sans MS", cursive' },
+        { label: 'Garamond', value: 'Garamond, serif' },
+        { label: 'Franklin Gothic', value: '"Franklin Gothic Medium", sans-serif' },
+        { label: 'Gill Sans', value: '"Gill Sans", sans-serif' },
+      ]
+    }
+  ];
+
+  sel.innerHTML = '';
+
+  fontGroups.forEach(group => {
+    const optgroup = document.createElement('optgroup');
+    optgroup.label = group.label;
+    group.fonts.forEach(f => {
+      const opt = document.createElement('option');
+      opt.value = f.value;
+      opt.textContent = f.label;
+      if(f.value) opt.style.fontFamily = f.value;
+      optgroup.appendChild(opt);
+    });
+    sel.appendChild(optgroup);
+  });
+
+  // Change handler — apply font
+  sel.addEventListener('change', () => {
+    if(sel.value) applyFF(sel.value);
+    else {
+      // Default — remove font override
+      ed.focus();
+      document.execCommand('removeFormat', false, null);
+    }
+    ed.focus();
+  });
+}
+
+// ── TOOLBAR LINE DELETE BUTTON ──
+// Toolbar හි "Delete Line" button add or wire
+function setupLineDeleteBtn(){
+  const btn = document.getElementById('btn-deleteLine');
+  if(btn){
+    btn.onclick = () => {
+      if(typeof deleteCurrentLine === 'function') deleteCurrentLine();
+    };
+    btn.title = 'Delete current line (Ctrl+Shift+K)';
+  }
+}
+
+// ── TOOLBAR TOOLTIPS ENHANCE ──
+// Existing toolbar buttons වලට keyboard shortcut tooltip add
+function enhanceToolbarTooltips(){
+  const tipMap = {
+    'btn-bold':          'Bold (Ctrl+B)',
+    'btn-italic':        'Italic (Ctrl+I)',
+    'btn-underline':     'Underline (Ctrl+U)',
+    'btn-strikethrough': 'Strikethrough',
+    'btn-undo':          'Undo (Ctrl+Z)',
+    'btn-redo':          'Redo (Ctrl+Y)',
+    'btn-justifyLeft':   'Align Left',
+    'btn-justifyCenter': 'Center',
+    'btn-justifyRight':  'Align Right',
+    'btn-justifyFull':   'Justify',
+    'spellBtn':          'Toggle Spellcheck',
+    'themeBtn':          'Toggle Dark/Light',
+  };
+  Object.entries(tipMap).forEach(([id, tip]) => {
+    const el = document.getElementById(id);
+    if(el && !el.title) el.title = tip;
+  });
+}
+
 // ── SHORTCUTS PANEL ──
 function buildPanel(){
   const g=document.getElementById('pgrid');
@@ -62,11 +168,23 @@ function filterPanel(q){
   });
 }
 
+// ── BRACKET PAIR TOGGLE (optional UI button) ──
+let bracketPairsEnabled = true;
+function toggleBracketPairs(){
+  bracketPairsEnabled = !bracketPairsEnabled;
+  const btn = document.getElementById('btn-brackets');
+  if(btn) btn.classList.toggle('on', bracketPairsEnabled);
+  toast('Auto-brackets ' + (bracketPairsEnabled ? 'on' : 'off'));
+}
+
 // ── INIT ──
 buildPanel();
 rebuildCustomGrid();
 initCalculator();
 updateStats();
+setupFontSelector();
+setupLineDeleteBtn();
+enhanceToolbarTooltips();
 ed.focus();
 
 // Keyboard shortcut hint tooltip
