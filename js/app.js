@@ -190,4 +190,6 @@ ed.focus();
 // Keyboard shortcut hint tooltip
 document.addEventListener('keydown',e=>{
   if(e.ctrlKey&&e.key==='/')openFindReplace();
+  // F1 = onboarding tour re-open
+  if(e.key==='F1'){e.preventDefault();if(typeof openOnboardingTour==='function')openOnboardingTour();}
 });
