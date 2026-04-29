@@ -277,6 +277,7 @@ function buildDataLabUI() {
         <input class="dl-formula-input" id="dl-chart-label-col" value="A" placeholder="A" style="width:40px;font-size:11px">
       </label>
       <button class="dl-tbtn" onclick="dlAutoFillChartCols()" title="Auto-detect columns from data" style="font-size:10px">🔍 Auto</button>
+      <div id="dl-col-toggles" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-left:4px"></div>
       <label style="font-size:10px;color:var(--muted)">
         <input type="checkbox" id="dl-chart-stacked" style="margin-right:3px">Stacked
       </label>
@@ -511,7 +512,33 @@ function injectDLStyles() {
     .dl-chart-legend { display:flex;flex-wrap:wrap;gap:8px;padding:6px 12px;border-top:1px solid var(--border);font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);min-height:28px; }
     .dl-legend-item { display:flex;align-items:center;gap:4px; }
     .dl-legend-dot { width:10px;height:10px;border-radius:2px;flex-shrink:0; }
-  `;
+    /* ✅ NEW — add inside the styles string in injectDLStyles() */
+    .dl-col-toggle {padding: 2px 7px;font-size: 11px;font-family: 'JetBrains Mono', monospace;font-weight: 700;border-radius: 4px;border: 1px solid var(--border);background: var(--btn);color: var(--muted);cursor: pointer;transition: all 0.15s;}
+    .dl-col-toggle:hover { border-color: var(--accent); color: var(--accent); }
+    .dl-col-toggle.data-col { background: rgba(167,139,250,0.2); border-color: #a78bfa; color: #a78bfa; }
+    .dl-col-toggle.label-col { background: rgba(52,211,153,0.15); border-color: #34d399; color: #34d399; }
+    /* ✅ NEW — add inside injectDLStyles() styles string */
+    .dl-ghost-fill {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      color: #a78bfa;
+      background: rgba(30,20,50,0.95);
+      border: 1px solid #a78bfa;
+      border-radius: 4px;
+      padding: 2px 7px;
+      cursor: pointer;
+      z-index: 20;
+      white-space: nowrap;
+      pointer-events: all;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+      transition: background 0.15s;
+    }
+    .dl-ghost-fill:hover { background: rgba(167,139,250,0.3); }
+    `;
   document.head.appendChild(s);
 }
 
@@ -647,6 +674,12 @@ function dlCellBlur(el, r, c) {
     hideDLSuggestions();
     const fh = document.getElementById('dl-func-help');
     if (fh) fh.textContent = '';
+    // ✅ dlCommitCell ශේෂ වෙලා — _pendingGhost set වෙලා ඇත්නම් ghost show කරන්න
+    if (DL._pendingGhost) {
+      const { r: pr, c: pc, formula } = DL._pendingGhost;
+      DL._pendingGhost = null;
+      dlShowFormulaGhost(pr, pc, formula);
+    }
   }, 120);
 }
 
@@ -697,11 +730,11 @@ function dlNavigate(fromR, fromC, dr, dc) {
 function dlCellKey(e, el, r, c) {
   const isEditing = !el.hasAttribute('readonly');
 
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    el.blur();
-    dlNavigate(r, c, 1, 0);
-  } else if (e.key === 'Tab') {
+ if (e.key === 'Enter') {
+  e.preventDefault();
+  el.blur();
+  dlNavigate(r, c, 1, 0);
+} else if (e.key === 'Tab') {
     e.preventDefault();
     el.blur();
     dlNavigate(r, c, 0, e.shiftKey ? -1 : 1);
@@ -732,6 +765,73 @@ function dlCellKey(e, el, r, c) {
       dlCellInput(el, r, c);
     }
   }
+}
+
+// ✅ Formula ghost fill — data commit වෙලා පස්සේ call වෙනවා
+function dlShowFormulaGhost(r, c, formula) {
+  const nextRow = r + 1;
+  if (nextRow >= DL.rows) return;
+  // next row-ට දැනටමත් data ඇත්නම් skip
+  if (DL.data[`${nextRow}-${c}`]?.raw) return;
+
+  const shifted = dlShiftFormulaRows(formula, 1);
+  dlGhostFill(nextRow, c, shifted);
+}
+
+// Row numbers shift කරන්න: =AVG(B2:D2) → =AVG(B3:D3)
+function dlShiftFormulaRows(formula, delta) {
+  return formula.replace(/([A-Za-z]+)(\d+)/g, (match, col, row) => {
+    return col + (parseInt(row) + delta);
+  });
+}
+
+// Next cell-ට ghost preview element add කරන්න
+function dlGhostFill(r, c, formula) {
+  // පරණ ghost remove
+  document.querySelectorAll('.dl-ghost-fill').forEach(g => g.remove());
+
+  const td = document.getElementById(`dt-${r}-${c}`);
+  if (!td) return;
+
+  const ghost = document.createElement('div');
+  ghost.className = 'dl-ghost-fill';
+  ghost.textContent = '↓ ' + formula;
+  ghost.title = 'Click to fill formula here (or press Enter on this cell)';
+  ghost.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dlAcceptGhostFill(r, c, formula);
+  });
+  td.appendChild(ghost);
+
+  // Navigate කලාම ghost dismiss
+  const onNavigate = () => {
+    ghost.remove();
+    document.removeEventListener('mousedown', onOutsideClick);
+  };
+  const onOutsideClick = (e) => {
+    if (!td.contains(e.target)) { ghost.remove(); document.removeEventListener('mousedown', onOutsideClick); }
+  };
+  setTimeout(() => document.addEventListener('mousedown', onOutsideClick), 50);
+}
+
+function dlAcceptGhostFill(r, c, formula) {
+  document.querySelectorAll('.dl-ghost-fill').forEach(g => g.remove());
+
+  const key = `${r}-${c}`;
+  const existingType = DL.data[key]?.type || 'auto';
+  dlPushUndo();
+  DL.data[key] = { raw: formula, formula, type: existingType };
+  try {
+    const result = dlEvaluate(formula.substring(1));
+    DL.data[key].value = formatDLResult(result);
+  } catch {
+    DL.data[key].value = '#ERR!';
+  }
+  dlRenderTable();
+  // Accept කලාම ඒ cell-ටත් ghost show කරන්න (chain fill)
+  dlShowFormulaGhost(r, c, formula);
+  dlShowToast('Formula filled ↓', 'success');
 }
 
 function dlDblClick(r, c) {
@@ -787,18 +887,20 @@ function dlCommitCell(el, r, c) {
       el.value = '#ERR!';
       el.className = 'dl-cell-input error-cell';
     }
+    // ✅ data save වෙලා ඉවර — ghost preview show කරන්න
+    DL._pendingGhost = { r, c, formula: raw };
   } else {
     const formatted = existingType !== 'auto' ? dlFormatByType(raw, existingType) : raw;
     DL.data[key] = { raw, value: formatted, type: existingType };
     el.value = formatted;
     el.setAttribute('data-value', formatted);
-    // Assign class based on type
     let cls = 'text-cell';
     if (['usd','lkr','eur','gbp','jpy'].includes(existingType)) cls = 'currency-cell';
     else if (existingType === 'boolean') cls = 'bool-cell';
     else if (['date','time','datetime'].includes(existingType)) cls = 'date-cell';
     else if (!isNaN(parseFloat(raw)) && raw !== '') cls = 'num-cell';
     el.className = 'dl-cell-input ' + cls;
+    DL._pendingGhost = null;
   }
 
   el.setAttribute('data-raw', raw);
@@ -1684,6 +1786,39 @@ function dlFillDown() {
   dlShowToast('Filled down');
 }
 
+// ✅ NEW FUNCTION — add near dlFillDown()
+function dlFillDownSelection() {
+  const sel = dlGetSelectionRange();
+  if (!sel) return;
+  const topKey = `${sel.r1}-${sel.c1}`;
+  const topData = DL.data[topKey];
+  if (!topData?.formula && !topData?.raw) return;
+
+  dlPushUndo();
+  const baseFormula = topData.formula || topData.raw;
+
+  for (let r = sel.r1 + 1; r <= sel.r2; r++) {
+    const delta = r - sel.r1;
+    const shifted = dlShiftFormulaRows(baseFormula, delta);
+    const key = `${r}-${sel.c1}`;
+    DL.data[key] = { raw: shifted, formula: shifted.startsWith('=') ? shifted : undefined };
+    try {
+      if (shifted.startsWith('=')) {
+        const result = dlEvaluate(shifted.substring(1));
+        DL.data[key].value = formatDLResult(result);
+        DL.data[key].formula = shifted;
+      } else {
+        DL.data[key].value = shifted;
+        delete DL.data[key].formula;
+      }
+    } catch {
+      DL.data[key].value = '#ERR!';
+    }
+  }
+  dlRenderTable();
+  dlShowToast(`Filled down ${sel.r2 - sel.r1} rows!`, 'success');
+}
+
 function dlFillRight() {
   if (!DL.activeCell) return;
   const sel = dlGetSelectionRange();
@@ -1848,8 +1983,8 @@ function dlCopyToEditor() {
 
 // ── Advanced Chart ───────────────────────────────────────────
 // Auto-detect chart columns from actual data
+// line 1851 — dlAutoFillChartCols() function replace with:
 function dlAutoFillChartCols() {
-  // Find which columns actually have data
   const colsWithData = [];
   for (let c = 0; c < DL.cols; c++) {
     let hasData = false;
@@ -1861,7 +1996,6 @@ function dlAutoFillChartCols() {
   }
   if (!colsWithData.length) { dlShowToast('No data found in spreadsheet', 'warn'); return; }
 
-  // First col = label, rest = data
   const labelInput = document.getElementById('dl-chart-label-col');
   const dataInput = document.getElementById('dl-chart-dataset-cols');
   if (labelInput) labelInput.value = dlColLetter(colsWithData[0]);
@@ -1869,7 +2003,68 @@ function dlAutoFillChartCols() {
     const dataCols = colsWithData.slice(1);
     dataInput.value = dataCols.length ? dataCols.map(c => dlColLetter(c)).join(',') : dlColLetter(colsWithData[0]);
   }
+
+  // ✅ NEW: render interactive column toggle buttons
+  dlRenderColToggles(colsWithData);
+
   dlShowToast('Columns auto-detected!', 'success');
+}
+
+// ✅ NEW FUNCTION — add after dlAutoFillChartCols() (after line 1873)
+function dlRenderColToggles(colsWithData) {
+  const container = document.getElementById('dl-col-toggles');
+  if (!container) return;
+
+  const labelVal = document.getElementById('dl-chart-label-col')?.value?.trim() || 'A';
+  const dataVal  = document.getElementById('dl-chart-dataset-cols')?.value?.trim() || '';
+  const dataCols = dataVal.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+
+  container.innerHTML = colsWithData.map(c => {
+    const letter = dlColLetter(c);
+    const isLabel  = letter === labelVal.toUpperCase();
+    const isData   = dataCols.includes(letter);
+    const cls = isLabel ? 'dl-col-toggle label-col' : isData ? 'dl-col-toggle data-col' : 'dl-col-toggle';
+    const title = isLabel ? 'Label column' : isData ? 'Data column (click to remove)' : 'Click to add as data column';
+    return `<button class="${cls}" title="${title}" onclick="dlToggleChartCol('${letter}')">${letter}</button>`;
+  }).join('');
+}
+
+function dlToggleChartCol(letter) {
+  const labelInput = document.getElementById('dl-chart-label-col');
+  const dataInput  = document.getElementById('dl-chart-dataset-cols');
+  if (!labelInput || !dataInput) return;
+
+  const currentLabel = labelInput.value.trim().toUpperCase();
+  let dataCols = dataInput.value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+
+  if (letter === currentLabel) {
+    // Label column clicked — swap: make it a data col, pick next as label
+    const allCols = [];
+    for (let c = 0; c < DL.cols; c++) allCols.push(dlColLetter(c));
+    const others = allCols.filter(l => l !== letter && !dataCols.includes(l));
+    if (others.length) {
+      labelInput.value = others[0];
+      dataCols.unshift(letter);
+      dataCols = dataCols.filter(l => l !== others[0]);
+    }
+  } else if (dataCols.includes(letter)) {
+    // Already a data col — remove it
+    dataCols = dataCols.filter(l => l !== letter);
+  } else {
+    // Not selected — add as data col
+    dataCols.push(letter);
+  }
+
+  dataInput.value = dataCols.join(',');
+
+  // Re-render toggles with updated state
+  const colsWithData = [];
+  for (let c = 0; c < DL.cols; c++) {
+    for (let r = 0; r < DL.rows; r++) {
+      if (dlGetCellStr(r, c)) { colsWithData.push(c); break; }
+    }
+  }
+  dlRenderColToggles(colsWithData);
 }
 
 // BUG FIX: dlUpdateChartOptions was missing
@@ -1900,6 +2095,11 @@ function dlGetHeaderRow() {
 }
 
 function dlInsertChart() {
+  const optBar = document.getElementById('dl-chart-options-bar');
+  if (optBar && optBar.style.display === 'none') {
+    optBar.style.display = 'flex';
+    dlAutoFillChartCols(); // auto-detect and show toggles
+  }
   const panel = document.getElementById('dl-chart-panel');
   panel.style.display = 'flex';
   panel.style.flexDirection = 'column';
@@ -2201,6 +2401,7 @@ function setupDLKeyboard() {
       else if (e.key === 'l') { e.preventDefault(); dlFmtAlign('left'); }
       else if (e.key === 'e') { e.preventDefault(); dlFmtAlign('center'); }
       else if (e.key === 'r') { e.preventDefault(); dlFmtAlign('right'); }
+      else if (e.key === 'd') {e.preventDefault();dlFillDownSelection(); }
     }
     if ((e.key === 'Delete' || e.key === 'Backspace') && DL.activeCell && !DL.formulaMode) {
       const el = document.getElementById(`dc-${DL.activeCell.r}-${DL.activeCell.c}`);
