@@ -92,7 +92,8 @@ function calcAddRow(expr){
         value="${expr}" spellcheck="false" autocomplete="off">
     </div>
     <div class="calc-res def" id="calc-res-${i}">—</div>
-    <button class="calc-insert" id="calc-ins-${i}" title="Insert into Editor" onclick="calcInsertResult(${i})">↩</button>
+    <button class="calc-insert" id="calc-ins-${i}" title="Insert result as plain text" onclick="calcInsertResult(${i})">↩</button>
+    <button class="calc-vis-btn" id="calc-vis-${i}" title="Insert as visual math notation" onclick="calcInsertVisual(${i})">∫√ Math</button>
     <button class="calc-insert" title="Draw Graph" onclick="calcDrawGraph(${i})" style="color:var(--accent2)">📈</button>
     <button class="calc-del-btn" onclick="calcRemoveRow(${i})" title="Delete row">×</button>`; 
   document.getElementById('calc-rows').appendChild(div);
@@ -145,6 +146,8 @@ function calcEvalRow(i) {
     resEl.className = 'calc-res def';
     const ins = document.getElementById('calc-ins-' + i);
     if(ins) ins.style.display = 'none';
+    const vis = document.getElementById('calc-vis-' + i);
+    if(vis) vis.classList.remove('visible');
     return;
   }
 
@@ -156,6 +159,8 @@ function calcEvalRow(i) {
       resEl.className = 'calc-res ok sym';
       const ins = document.getElementById('calc-ins-' + i);
       if(ins) { ins.dataset.val = symResult; ins.style.display = 'flex'; }
+      const visS = document.getElementById('calc-vis-' + i);
+      if(visS) visS.classList.add('visible');
       return;
     }
   }
@@ -191,6 +196,8 @@ function calcEvalRow(i) {
     if(ins) {
         ins.dataset.val = isMatrix ? calcFmtMatrix(result) : calcFmt(result);
         ins.style.display = 'flex';
+        const visN = document.getElementById('calc-vis-' + i);
+        if(visN) visN.classList.add('visible');
     }
 
   } catch (err) {
@@ -198,6 +205,8 @@ function calcEvalRow(i) {
     resEl.className = 'calc-res err';
     const ins = document.getElementById('calc-ins-' + i);
     if(ins) ins.style.display = 'none';
+    const visE = document.getElementById('calc-vis-' + i);
+    if(visE) visE.classList.remove('visible');
   }
 }
 
@@ -261,7 +270,19 @@ function calcDrawGraph(i) {
     if(!canvasWrap) {
         canvasWrap = document.createElement('div');
         canvasWrap.id = 'graphCanvasWrap';
-        canvasWrap.style = "width:100%; height:320px; padding:10px; background:var(--surf2); border-radius:8px; margin-top:15px; border:1px solid var(--border);";
+        canvasWrap.style.cssText = [
+                                      "width:100%",
+                                      "height:320px",
+                                      "min-height:280px",
+                                      "padding:10px",
+                                      "background:var(--surf2)",
+                                      "border-radius:8px",
+                                      "margin-top:15px",
+                                      "border:1px solid var(--border)",
+                                      "position:relative",
+                                      "box-sizing:border-box",
+                                      "overflow:hidden"
+                                    ].join(';');
         const closeBtn = document.createElement('button');
         closeBtn.textContent = '✕ Clear All';
         closeBtn.className = 'hbtn';
@@ -344,6 +365,11 @@ function calcDrawGraph(i) {
                 options: {
                   responsive: true,
                   maintainAspectRatio: false,
+                  resizeDelay: 100,
+                  onResize: (chart, size) => {
+                    chart.canvas.style.width = '100%';
+                    chart.canvas.style.height = '100%';
+                  },
                   scales: {
                       x: { grid:{color:'rgba(255,255,255,0.05)'}, ticks:{color:'#888'} },
                       y: { grid:{color:'rgba(255,255,255,0.05)'}, ticks:{color:'#888'} }
@@ -501,4 +527,231 @@ function resetGraphZoom() {
         calcChartInstance.resetZoom();
         if(typeof toast === 'function') toast('Zoom reset!', 'info');
     }
+}
+// ── MATH VISUAL INSERT (expression → visual notation → editor) ──────────────
+
+function calcInsertVisual(i) {
+  const inp = document.getElementById('calc-inp-' + i);
+  const resEl = document.getElementById('calc-res-' + i);
+  if (!inp) return;
+  const expr = inp.value.trim();
+  const result = resEl ? resEl.textContent : '';
+  if (!expr) return;
+  const html = mathToVisualHTML(expr, result);
+  if (!html) {
+    if(typeof toast === 'function') toast('Cannot render visual for this expression', 'warn');
+    return;
+  }
+  const ed = document.getElementById('ed');
+  if (!ed) return;
+  ed.focus();
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount) {
+    const range = sel.getRangeAt(0);
+    range.collapse(false);
+    const frag = range.createContextualFragment(html + '\u00a0');
+    range.insertNode(frag);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } else {
+    ed.insertAdjacentHTML('beforeend', html + '\u00a0');
+  }
+  if(typeof toast === 'function') toast('Math inserted as visual notation ✓', 'success');
+}
+
+function mathToVisualHTML(expr, result) {
+  const e = expr.trim();
+  if (!document.getElementById('mv-styles')) injectMVStyles();
+
+  // √ sqrt(x)
+  const sqrtM = e.match(/^sqrt\((.+)\)$/i);
+  if (sqrtM) return mvWrap(`<span class="mv-sqrt"><span class="mv-sqrt-sign">√</span><span class="mv-sqrt-bar">${mathArgToHTML(sqrtM[1])}</span></span>`, result);
+
+  // ∛ cbrt(x)
+  const cbrtM = e.match(/^cbrt\((.+)\)$/i);
+  if (cbrtM) return mvWrap(`<span class="mv-sqrt"><span class="mv-sqrt-sign">∛</span><span class="mv-sqrt-bar">${mathArgToHTML(cbrtM[1])}</span></span>`, result);
+
+  // ⁿ√ nthRoot(x,n) / root(x,n)
+  const rootM = e.match(/^(?:nthRoot|root)\((.+),\s*(.+)\)$/i);
+  if (rootM) return mvWrap(`<span class="mv-sqrt"><sup class="mv-nroot">${mathArgToHTML(rootM[2])}</sup><span class="mv-sqrt-sign">√</span><span class="mv-sqrt-bar">${mathArgToHTML(rootM[1])}</span></span>`, result);
+
+  // frac(a,b)
+  const fracM = e.match(/^frac\((.+),\s*(.+)\)$/i);
+  if (fracM) return mvWrap(mvFrac(fracM[1], fracM[2]), result);
+
+  // plain a/b  (no function calls, single slash)
+  const slashM = e.match(/^([^/()+\-*^]+)\/([^/()+\-*^]+)$/);
+  if (slashM) return mvWrap(mvFrac(slashM[1].trim(), slashM[2].trim()), result);
+
+  // diff(f,x) → d/dx(f)
+  const diffM = e.match(/^(?:diff|d\/d[a-z])\((.+),\s*([a-z])\)$/i);
+  if (diffM) return mvWrap(
+    `<span class="mv-deriv">${mvFrac('d','d'+diffM[2])}<span class="mv-paren">(${mathArgToHTML(diffM[1])})</span></span>`, result);
+
+  // pdiff(f,x) → ∂/∂x(f)
+  const pdM = e.match(/^pdiff\((.+),\s*([a-z])\)$/i);
+  if (pdM) return mvWrap(
+    `<span class="mv-deriv">${mvFrac('∂','∂'+pdM[2])}<span class="mv-paren">(${mathArgToHTML(pdM[1])})</span></span>`, result);
+
+  // integrate(f,x) / integrate(f,x,a,b)
+  const intM = e.match(/^(?:integrate|int)\((.+),\s*([a-z])(?:,\s*(.+?),\s*(.+?))?\)$/i);
+  if (intM) {
+    const lo = intM[3] ? mathArgToHTML(intM[3]) : '';
+    const hi = intM[4] ? mathArgToHTML(intM[4]) : '';
+    const limits = (lo||hi) ? `<span class="mv-int-limits"><sup>${hi}</sup><sub>${lo}</sub></span>` : '';
+    return mvWrap(`<span class="mv-integral"><span class="mv-int-sign">∫</span>${limits}<span class="mv-int-body">${mathArgToHTML(intM[1])} d${intM[2]}</span></span>`, result);
+  }
+
+  // sum(expr,var,lo,hi)
+  const sumM = e.match(/^sum\((.+),\s*([a-z]),\s*(.+?),\s*(.+?)\)$/i);
+  if (sumM) return mvWrap(
+    `<span class="mv-bigop"><span class="mv-bigop-sym">Σ</span><span class="mv-bigop-limits"><sup>${mathArgToHTML(sumM[4])}</sup><sub>${sumM[2]}=${mathArgToHTML(sumM[3])}</sub></span><span class="mv-bigop-body">${mathArgToHTML(sumM[1])}</span></span>`, result);
+
+  // prod(expr,var,lo,hi)
+  const prodM = e.match(/^prod\((.+),\s*([a-z]),\s*(.+?),\s*(.+?)\)$/i);
+  if (prodM) return mvWrap(
+    `<span class="mv-bigop"><span class="mv-bigop-sym">Π</span><span class="mv-bigop-limits"><sup>${mathArgToHTML(prodM[4])}</sup><sub>${prodM[2]}=${mathArgToHTML(prodM[3])}</sub></span><span class="mv-bigop-body">${mathArgToHTML(prodM[1])}</span></span>`, result);
+
+  // lim(f,x,a)
+  const limM = e.match(/^(?:lim|limit)\((.+),\s*([a-z]),\s*(.+)\)$/i);
+  if (limM) return mvWrap(
+    `<span class="mv-lim"><span class="mv-lim-word">lim</span><sub class="mv-lim-sub">${limM[2]}→${mathArgToHTML(limM[3])}</sub> ${mathArgToHTML(limM[1])}</span>`, result);
+
+  // abs(x) → |x|
+  const absM = e.match(/^abs\((.+)\)$/i);
+  if (absM) return mvWrap(`<span class="mv-abs"><span class="mv-bar">|</span>${mathArgToHTML(absM[1])}<span class="mv-bar">|</span></span>`, result);
+
+  // floor(x) → ⌊x⌋
+  const floorM = e.match(/^floor\((.+)\)$/i);
+  if (floorM) return mvWrap(`<span class="mv-abs"><span class="mv-bar">⌊</span>${mathArgToHTML(floorM[1])}<span class="mv-bar">⌋</span></span>`, result);
+
+  // ceil(x) → ⌈x⌉
+  const ceilM = e.match(/^ceil\((.+)\)$/i);
+  if (ceilM) return mvWrap(`<span class="mv-abs"><span class="mv-bar">⌈</span>${mathArgToHTML(ceilM[1])}<span class="mv-bar">⌉</span></span>`, result);
+
+  // log(x,b) → log_b(x)
+  const logbM = e.match(/^log\((.+),\s*(.+)\)$/i);
+  if (logbM) return mvWrap(`<span class="mv-func">log<sub>${mathArgToHTML(logbM[2])}</sub>(${mathArgToHTML(logbM[1])})</span>`, result);
+
+  const lnM = e.match(/^ln\((.+)\)$/i);
+  if (lnM) return mvWrap(`<span class="mv-func">ln(${mathArgToHTML(lnM[1])})</span>`, result);
+
+  // trig
+  const trigM = e.match(/^(sin|cos|tan|sec|csc|cot|sinh|cosh|tanh|asin|acos|atan)\((.+)\)$/i);
+  if (trigM) return mvWrap(`<span class="mv-func">${trigM[1].toLowerCase()}(${mathArgToHTML(trigM[2])})</span>`, result);
+
+  // matrix [[...]]
+  if (e.includes('[[')) {
+    const varPre = e.includes('=') ? e.split('=')[0].trim() : '';
+    const matPart = e.includes('=') ? e.split('=').slice(1).join('=').trim() : e;
+    try {
+      const clean = matPart.replace(/^\[|\]$/g,'');
+      const rowStrs = clean.split('],[');
+      const rows = rowStrs.map(r => r.replace(/[\[\]]/g,'').split(',')
+        .map(v => `<td class="mv-mtd">${mathArgToHTML(v.trim())}</td>`).join(''));
+      const tbl = `<table class="mv-matrix"><tbody>${rows.map(r=>`<tr>${r}</tr>`).join('')}</tbody></table>`;
+      return mvWrap(`<span class="mv-matrix-wrap">${varPre ? `<span class="mv-func">${escMV(varPre)} = </span>` : ''}${tbl}</span>`, result);
+    } catch(err) {}
+  }
+
+  // x^n power  (simple, no function prefix)
+  const powM = e.match(/^(.+?)\^(.+)$/);
+  if (powM && !e.match(/^[a-z]+\(/i)) {
+    return mvWrap(`${mathArgToHTML(powM[1])}<sup class="mv-sup">${mathArgToHTML(powM[2])}</sup>`, result);
+  }
+
+  // variable assignment: x = expr = result
+  const assignM = e.match(/^([a-zA-Z_]\w*)\s*=\s*(.+)$/);
+  if (assignM && result && result !== '—' && result !== 'Error') {
+    return mvWrap(`<var class="mv-var">${escMV(assignM[1])}</var> = ${mathArgToHTML(assignM[2])} = <span class="mv-result">${escMV(result)}</span>`, result);
+  }
+
+  // plain: expr = result
+  if (result && result !== '—' && result !== 'Error' && result !== 'fn saved') {
+    return mvWrap(`${mathArgToHTML(e)} = <span class="mv-result">${escMV(result)}</span>`, result);
+  }
+
+  return null;
+}
+
+function mathArgToHTML(s) {
+  if (!s) return '';
+  s = s.trim();
+  s = s.replace(/sqrt\(([^)]+)\)/gi, (_, inner) =>
+    `<span class="mv-sqrt-i"><span class="mv-sqrt-sign">√</span><span class="mv-sqrt-bar">${escMV(inner)}</span></span>`);
+  s = s.replace(/([a-zA-Z0-9_.]+)\^([a-zA-Z0-9_.]+)/g, (_, b, ex) =>
+    `${escMV(b)}<sup class="mv-sup">${escMV(ex)}</sup>`);
+  s = s.replace(/\bpi\b/gi,'π').replace(/\btheta\b/gi,'θ').replace(/\balpha\b/gi,'α')
+       .replace(/\bbeta\b/gi,'β').replace(/\bgamma\b/gi,'γ').replace(/\bdelta\b/gi,'δ')
+       .replace(/\blambda\b/gi,'λ').replace(/\binfinity\b/gi,'∞').replace(/Infinity/g,'∞');
+  return s;
+}
+
+function mvFrac(num, den) {
+  return `<span class="mv-frac"><span class="mv-num">${mathArgToHTML(String(num))}</span><span class="mv-den">${mathArgToHTML(String(den))}</span></span>`;
+}
+
+function mvWrap(inner, result) {
+  return `<span class="mv-block" contenteditable="false">${inner}</span>`;
+}
+
+function escMV(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function injectMVStyles() {
+  const s = document.createElement('style');
+  s.id = 'mv-styles';
+  s.textContent = `
+    .mv-block {
+      display: inline-flex; align-items: center;
+      font-family: 'JetBrains Mono','STIX Two Math',monospace;
+      font-size: 1em; color: var(--accent,#a78bfa);
+      background: rgba(167,139,250,0.07);
+      border: 1px solid rgba(167,139,250,0.22);
+      border-radius: 5px; padding: 1px 7px; margin: 0 2px;
+      vertical-align: middle; user-select: all; cursor: default; gap: 1px;
+    }
+    .mv-block:hover { background: rgba(167,139,250,0.15); border-color: rgba(167,139,250,0.45); }
+    .mv-sqrt { display:inline-flex; align-items:center; }
+    .mv-sqrt-sign { font-size:1.15em; line-height:1; padding-right:1px; }
+    .mv-sqrt-bar { border-top:1.5px solid currentColor; padding:0 3px; display:inline-block; }
+    .mv-sqrt-i { display:inline-flex; align-items:center; font-size:0.88em; }
+    .mv-nroot { font-size:0.58em; vertical-align:super; color:var(--accent2,#34d399); }
+    .mv-frac { display:inline-flex; flex-direction:column; align-items:center; vertical-align:middle; margin:0 2px; }
+    .mv-num { border-bottom:1.5px solid currentColor; padding:0 5px; font-size:0.86em; line-height:1.35; text-align:center; }
+    .mv-den { padding:0 5px; font-size:0.86em; line-height:1.35; text-align:center; }
+    .mv-deriv { display:inline-flex; align-items:center; gap:2px; }
+    .mv-paren { color:var(--muted,#888); }
+    .mv-integral { display:inline-flex; align-items:center; gap:2px; }
+    .mv-int-sign { font-size:1.65em; line-height:1; }
+    .mv-int-limits { display:inline-flex; flex-direction:column; font-size:0.63em; line-height:1.15; color:var(--accent2,#34d399); }
+    .mv-int-body { display:inline-flex; align-items:center; }
+    .mv-bigop { display:inline-flex; align-items:center; gap:3px; }
+    .mv-bigop-sym { font-size:1.5em; line-height:1; }
+    .mv-bigop-limits { display:inline-flex; flex-direction:column; font-size:0.6em; line-height:1.2; color:var(--accent2,#34d399); }
+    .mv-bigop-body { font-size:0.95em; }
+    .mv-lim { display:inline-flex; align-items:baseline; gap:2px; }
+    .mv-lim-word { font-style:italic; }
+    .mv-lim-sub { font-size:0.65em; color:var(--muted,#888); }
+    .mv-abs { display:inline-flex; align-items:center; }
+    .mv-bar { font-size:1.2em; }
+    .mv-matrix-wrap { display:inline-flex; align-items:center; gap:5px; }
+    .mv-matrix { border-collapse:collapse; border-left:2.5px solid var(--accent,#a78bfa); border-right:2.5px solid var(--accent,#a78bfa); }
+    .mv-mtd { padding:1px 7px; font-size:0.84em; text-align:center; color:var(--text,#e2e8f0); }
+    .mv-sup { font-size:0.68em; vertical-align:super; color:var(--accent2,#34d399); }
+    .mv-result { color:var(--accent2,#34d399); font-weight:700; }
+    .mv-var { font-style:italic; color:var(--accent,#a78bfa); }
+    .mv-func { color:var(--accent,#a78bfa); font-style:italic; }
+    .calc-vis-btn {
+      background: rgba(167,139,250,0.1); border:1px solid rgba(167,139,250,0.3);
+      color:#a78bfa; border-radius:5px; padding:3px 7px; font-size:10px;
+      cursor:pointer; font-family:'JetBrains Mono',monospace; font-weight:700;
+      white-space:nowrap; transition:all .15s; display:none; align-items:center; gap:3px;
+    }
+    .calc-vis-btn:hover { background:rgba(167,139,250,0.25); border-color:#a78bfa; }
+    .calc-vis-btn.visible { display:inline-flex; }
+  `;
+  document.head.appendChild(s);
 }
