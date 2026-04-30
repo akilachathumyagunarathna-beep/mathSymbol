@@ -498,7 +498,7 @@ function injectDLStyles() {
     .dl-status-left { display:flex;gap:12px;align-items:center;flex-wrap:wrap; }
     .dl-sep-v { display:inline-block;width:1px;height:10px;background:var(--border); }
     #dl-sum-info, #dl-avg-info, #dl-cnt-info { color:var(--accent2); }
-    .dl-sug-box { position:fixed;background:var(--surf);border:1px solid var(--accent);border-radius:8px;z-index:9999;box-shadow:0 8px 32px rgba(0,0,0,.8);min-width:220px;overflow:hidden; }
+    .dl-sug-box { position:fixed;background:var(--surf);border:1px solid var(--accent);border-radius:8px;z-index:9999;box-shadow:0 8px 32px rgba(0,0,0,.8);min-width:220px;overflow:hidden;max-height:220px;overflow-y:auto; }
     .dl-sug-item { padding:7px 14px;cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text);display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border); }
     .dl-sug-item:last-child { border-bottom:none; }
     .dl-sug-item:hover, .dl-sug-item.active { background:var(--accent);color:#fff; }
@@ -797,6 +797,7 @@ function dlGhostFill(r, c, formula) {
   ghost.className = 'dl-ghost-fill';
   ghost.textContent = '↓ ' + formula;
   ghost.title = 'Click to fill formula here (or press Enter on this cell)';
+
   ghost.addEventListener('mousedown', (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -804,13 +805,17 @@ function dlGhostFill(r, c, formula) {
   });
   td.appendChild(ghost);
 
-  // Navigate කලාම ghost dismiss
-  const onNavigate = () => {
-    ghost.remove();
-    document.removeEventListener('mousedown', onOutsideClick);
-  };
+  // ✅ BUG FIX: use the ghost element itself (not td) to check containment.
+  // Previous fix used td which becomes stale after dlRenderTable rebuilds DOM,
+  // causing the old listener to remove the newly created ghost on the next row.
   const onOutsideClick = (e) => {
-    if (!td.contains(e.target)) { ghost.remove(); document.removeEventListener('mousedown', onOutsideClick); }
+    // Any click on a ghost-fill button should never dismiss — it's handled by its own mousedown
+    if (e.target.classList.contains('dl-ghost-fill')) return;
+    // Only dismiss if the ghost element still exists in DOM and click was outside it
+    if (!document.contains(ghost) || !ghost.contains(e.target)) {
+      ghost.remove();
+      document.removeEventListener('mousedown', onOutsideClick);
+    }
   };
   setTimeout(() => document.addEventListener('mousedown', onOutsideClick), 50);
 }
@@ -869,7 +874,9 @@ function dlCommitCell(el, r, c) {
     delete DL.data[key];
     el.className = 'dl-cell-input';
     el.setAttribute('data-value', '');
+    el.setAttribute('data-raw', '');
     el.setAttribute('data-formula', '');
+    el.setAttribute('readonly', '');  // ✅ BUG FIX: cell must return to readonly after clearing
     return;
   }
 
@@ -1011,14 +1018,18 @@ function dlEvaluate(expr) {
 
   let evalExpr = expr.replace(/([A-Z]+)(\d+)/g, (m, col, row) => {
     const r = parseInt(row) - 1, c = dlColIndex(col);
-    return dlGetCellNum(r, c) ?? 0;
+    const n = dlGetCellNum(r, c);
+    if (n !== undefined) return n;
+    const s = dlGetCellStr(r, c);
+    return s !== undefined ? `"${s}"` : 0;
   });
   evalExpr = evalExpr.replace(/\^/g, '**');
 
   try {
     if (typeof math !== 'undefined' && typeof calcVars !== 'undefined') {
       const scope = { ...calcVars, pi: Math.PI, e: Math.E };
-      const cleanExpr = exprOriginal.replace(/\^/g, '**');
+      // ✅ BUG FIX: use evalExpr (cell-replaced) not exprOriginal — math.js doesn't know D5 etc.
+      const cleanExpr = evalExpr.replace(/\*\*/g, '^');
       return math.evaluate(cleanExpr, scope);
     }
     return Function('"use strict"; const pi=Math.PI, e=Math.E; return (' + evalExpr + ')')();
@@ -1148,8 +1159,18 @@ function dlCallFunction(func, argsStr, preEvaluated = false) {
     case 'MEDIAN': { const sorted = [...nums].sort((a,b)=>a-b); const m = Math.floor(sorted.length/2); return sorted.length%2 ? sorted[m] : (sorted[m-1]+sorted[m])/2; }
     case 'STDEV': { const mean = nums.reduce((a,b)=>a+b,0)/nums.length; return Math.sqrt(nums.reduce((a,b)=>a+(b-mean)**2,0)/nums.length); }
     case 'VAR': { const mean = nums.reduce((a,b)=>a+b,0)/nums.length; return nums.reduce((a,b)=>a+(b-mean)**2,0)/nums.length; }
-    case 'LARGE': { const sorted2 = [...nums].sort((a,b)=>b-a); return sorted2[Math.round(parseFloat(args[1]))-1] ?? 0; }
-    case 'SMALL': { const sorted3 = [...nums].sort((a,b)=>a-b); return sorted3[Math.round(parseFloat(args[1]))-1] ?? 0; }
+    case 'LARGE': {
+      // ✅ BUG FIX: get the range values separately from k — nums[] includes k merged in
+      const largeRange = (() => { let v = []; for (const a of args.slice(0,-1)) { if (typeof a === 'number') { v.push(a); } else if (typeof a === 'string' && a.includes(':')) { v.push(...getRange(a)); } else { const n = parseFloat(a); if (!isNaN(n)) v.push(n); } } return v; })();
+      const largeK = Math.round(parseFloat(args[args.length-1])) - 1;
+      return [...largeRange].sort((a,b)=>b-a)[largeK] ?? 0;
+    }
+    case 'SMALL': {
+      // ✅ BUG FIX: same fix as LARGE
+      const smallRange = (() => { let v = []; for (const a of args.slice(0,-1)) { if (typeof a === 'number') { v.push(a); } else if (typeof a === 'string' && a.includes(':')) { v.push(...getRange(a)); } else { const n = parseFloat(a); if (!isNaN(n)) v.push(n); } } return v; })();
+      const smallK = Math.round(parseFloat(args[args.length-1])) - 1;
+      return [...smallRange].sort((a,b)=>a-b)[smallK] ?? 0;
+    }
     // String
     case 'LEN': return getStr(args[0]).length;
     case 'UPPER': return getStr(args[0]).toUpperCase();
@@ -1167,20 +1188,49 @@ function dlCallFunction(func, argsStr, preEvaluated = false) {
     case 'TEXT': return String(nums[0]);
     // Logical
     case 'IF': {
-      let cond;
-      try { cond = dlEvaluate(args[0]); } catch { cond = false; }
-      const isTrue = cond && cond !== 'FALSE' && cond !== 0;
-      const branch = isTrue ? args[1] : args[2];
-      if (!branch) return '';
-      try { return dlEvaluate(branch.trim()); } catch { return branch.replace(/^["']|["']$/g,''); }
+      // ✅ BUG FIX: args are pre-evaluated by dlEvaluate() before reaching here.
+      // args[0] = already-computed condition value (number/string/bool)
+      // args[1] = already-computed true-branch value
+      // args[2] = already-computed false-branch value
+      // Re-calling dlEvaluate() on them caused wrong results / errors.
+      const cond = args[0];
+      const isTrue = !!cond && cond !== 'FALSE' && cond !== 0 && cond !== '0' && cond !== '';
+      const result = isTrue ? args[1] : args[2];
+      if (result === undefined || result === null) return '';
+      // Strip surrounding quotes if it's a raw string literal that wasn't resolved
+      if (typeof result === 'string') return result.replace(/^["']|["']$/g, '');
+      return result;
     }
-    case 'AND': return args.every(a => { try { return !!dlEvaluate(a); } catch { return false; } });
-    case 'OR': return args.some(a => { try { return !!dlEvaluate(a); } catch { return false; } });
-    case 'NOT': { try { return !dlEvaluate(args[0]); } catch { return true; } }
-    case 'IFERROR': { try { const v = dlEvaluate(args[0]); return (String(v).startsWith('#')) ? dlEvaluate(args[1]) : v; } catch { try { return dlEvaluate(args[1]); } catch { return args[1]?.replace(/^["']|["']$/g,'') || ''; } } }
+    // ✅ BUG FIX: AND/OR/NOT/IFERROR — args are pre-evaluated, no re-evaluation needed
+    case 'AND': return args.every(a => !!a && a !== 'FALSE' && a !== 0 && a !== '');
+    case 'OR': return args.some(a => !!a && a !== 'FALSE' && a !== 0 && a !== '');
+    case 'NOT': { const v = args[0]; return !(!!v && v !== 'FALSE' && v !== 0 && v !== ''); }
+    case 'IFERROR': {
+      const v = args[0];
+      const isErr = v === undefined || v === null || String(v).startsWith('#') || (typeof v === 'number' && isNaN(v));
+      const fallback = args[1];
+      return isErr ? (typeof fallback === 'string' ? fallback.replace(/^["']|["']$/g,'') : (fallback ?? '')) : v;
+    }
     case 'ISBLANK': { const id = parseDLCellId(args[0]?.trim()); if (!id) return false; const el2 = document.getElementById(`dc-${id.r}-${id.c}`); return !el2?.getAttribute('data-value'); }
     case 'ISNUMBER': return !isNaN(parseFloat(getStr(args[0])));
     case 'ISTEXT': return isNaN(parseFloat(getStr(args[0])));
+    case 'RANK': {
+      // ✅ BUG FIX: RANK was listed in DL_FUNCTIONS but not implemented
+      const rankVal = typeof args[0] === 'number' ? args[0] : parseFloat(getStr(args[0]));
+      const rankRange = getRange(typeof args[1] === 'string' ? args[1] : '');
+      const rankOrder = parseFloat(args[2]) === 1 ? 1 : -1; // 0=desc(default), 1=asc
+      const sorted4 = [...rankRange].sort((a,b) => rankOrder === 1 ? a-b : b-a);
+      const idx = sorted4.indexOf(rankVal);
+      return idx >= 0 ? idx + 1 : '#N/A';
+    }
+    case 'MODE': {
+      // ✅ BUG FIX: MODE was listed in DL_FUNCTIONS but not implemented
+      const freq = {};
+      nums.forEach(n => { freq[n] = (freq[n] || 0) + 1; });
+      let modeVal = nums[0], modeCount = 0;
+      for (const [k,v] of Object.entries(freq)) { if (v > modeCount) { modeCount = v; modeVal = parseFloat(k); } }
+      return modeVal ?? 0;
+    }
     // Lookup
     case 'VLOOKUP': {
       const lookVal = parseFloat(args[0]) || getStr(args[0]);
@@ -1191,6 +1241,43 @@ function dlCallFunction(func, argsStr, preEvaluated = false) {
       for (let r = id1.r; r <= id2.r; r++) {
         const v = dlGetCellStr(r, id1.c) || String(dlGetCellNum(r, id1.c) || '');
         if (v == String(lookVal)) return dlGetCellStr(r, id1.c + colOffset) || dlGetCellNum(r, id1.c + colOffset) || '#N/A';
+      }
+      return '#N/A';
+    }
+    case 'HLOOKUP': {
+      // ✅ BUG FIX: HLOOKUP was listed in DL_FUNCTIONS but not implemented
+      const hlookVal = parseFloat(args[0]) || getStr(args[0]);
+      const [ha2, hb2] = (typeof args[1] === 'string' ? args[1] : '').split(':');
+      const hid1 = parseDLCellId(ha2?.trim()), hid2 = parseDLCellId(hb2?.trim());
+      const hRowOffset = Math.round(parseFloat(args[2])) - 1;
+      if (!hid1 || !hid2) return '#N/A';
+      for (let c = hid1.c; c <= hid2.c; c++) {
+        const v = dlGetCellStr(hid1.r, c) || String(dlGetCellNum(hid1.r, c) || '');
+        if (v == String(hlookVal)) return dlGetCellStr(hid1.r + hRowOffset, c) || dlGetCellNum(hid1.r + hRowOffset, c) || '#N/A';
+      }
+      return '#N/A';
+    }
+    case 'INDEX': {
+      // ✅ BUG FIX: INDEX was listed in DL_FUNCTIONS but not implemented
+      const [ia2, ib2] = (typeof args[0] === 'string' ? args[0] : '').split(':');
+      const iid1 = parseDLCellId(ia2?.trim()), iid2 = parseDLCellId(ib2?.trim());
+      if (!iid1) return '#N/A';
+      const iRow = Math.round(parseFloat(args[1])) - 1;
+      const iCol = args[2] !== undefined ? Math.round(parseFloat(args[2])) - 1 : 0;
+      const tr = iid1.r + iRow, tc = iid1.c + iCol;
+      return dlGetCellStr(tr, tc) ?? dlGetCellNum(tr, tc) ?? '#N/A';
+    }
+    case 'MATCH': {
+      // ✅ BUG FIX: MATCH was listed in DL_FUNCTIONS but not implemented
+      const matchVal = parseFloat(args[0]) || getStr(args[0]);
+      const [ma2, mb2] = (typeof args[1] === 'string' ? args[1] : '').split(':');
+      const mid1 = parseDLCellId(ma2?.trim()), mid2 = parseDLCellId(mb2?.trim());
+      if (!mid1 || !mid2) return '#N/A';
+      for (let r = mid1.r; r <= mid2.r; r++) {
+        for (let c = mid1.c; c <= mid2.c; c++) {
+          const v = dlGetCellStr(r, c) || String(dlGetCellNum(r, c) || '');
+          if (v == String(matchVal)) return (r - mid1.r) + (c - mid1.c) + 1;
+        }
       }
       return '#N/A';
     }
@@ -1260,9 +1347,11 @@ function dlRecalcAll() {
           cellData.value = display;
           el.value = display;
           el.setAttribute('data-value', display);
+          el.setAttribute('readonly', '');  // ✅ BUG FIX: ensure cell returns to readonly after recalc
           el.className = 'dl-cell-input formula-cell';
         } catch {
           el.value = '#ERR!';
+          el.setAttribute('readonly', '');  // ✅ BUG FIX: same for error state
           el.className = 'dl-cell-input error-cell';
         }
       }
@@ -1505,8 +1594,12 @@ function showDLSuggestions(el, query) {
   ).join('');
   box.style.display = 'block';
   const rect = el.getBoundingClientRect();
-  box.style.left = rect.left + 'px';
-  box.style.top = (rect.bottom + 2) + 'px';
+  // ✅ BUG FIX: clamp box position so all items are visible — flip above if not enough space below
+  const boxH = Math.min(220, matches.slice(0,8).length * 34 + 8);
+  const spaceBelow = window.innerHeight - rect.bottom - 4;
+  const top = spaceBelow >= boxH ? rect.bottom + 2 : rect.top - boxH - 2;
+  box.style.left = Math.min(rect.left, window.innerWidth - 240) + 'px';
+  box.style.top = Math.max(4, top) + 'px';
 }
 
 function dlApplySuggestion(func) {
@@ -1655,7 +1748,11 @@ function dlPasteCells() {
   for (let dr = 0; dr < rows; dr++)
     for (let dc = 0; dc < cols; dc++) {
       const k = `${r+dr}-${c+dc}`;
-      DL.data[k] = data[`${dr}-${dc}`] ? {...data[`${dr}-${dc}`]} : undefined;
+      if (data[`${dr}-${dc}`]) {
+        DL.data[k] = {...data[`${dr}-${dc}`]};
+      } else {
+        delete DL.data[k];  // ✅ BUG FIX: delete instead of assigning undefined
+      }
       if (fmt[`${dr}-${dc}`]) DL.fmt[k] = {...fmt[`${dr}-${dc}`]};
     }
   if (cut) {
@@ -1673,8 +1770,10 @@ function dlPasteCells() {
 // ── Sort ────────────────────────────────────────────────────
 function dlSortByCol(c) {
   DL.sortCol = c;
-  DL.sortDir *= -1;
-  dlSort(DL.sortDir === 1 ? 'asc' : 'desc');
+  // ✅ BUG FIX: determine current dir before toggling so first click = ascending
+  const newDir = DL.sortDir === 1 ? -1 : 1;
+  DL.sortDir = newDir;
+  dlSort(newDir === 1 ? 'asc' : 'desc');
 }
 
 function dlSort(dir) {
@@ -1721,7 +1820,10 @@ function dlApplyFilter(query) {
     return;
   }
   query = query.toLowerCase();
-  for (let r = 1; r < DL.rows; r++) {
+  // ✅ BUG FIX: start from row 0 — detect header row and always keep it visible
+  const headerRow = dlGetHeaderRow();
+  for (let r = 0; r < DL.rows; r++) {
+    if (r === headerRow) continue; // always show header
     let match = false;
     for (let c = 0; c < DL.cols; c++) {
       const el = document.getElementById(`dc-${r}-${c}`);
@@ -1739,7 +1841,8 @@ function dlClearFilter() {
   const input = document.getElementById('dl-filter-input');
   if (input) input.value = '';
   document.querySelectorAll('.dl-tr').forEach(tr => tr.classList.remove('dl-row-hidden'));
-  document.getElementById('dl-filter-bar').style.display = 'none';
+  const bar = document.getElementById('dl-filter-bar');
+  if (bar) bar.style.display = 'none';  // ✅ BUG FIX: null-check before accessing style
 }
 
 // ── Find & Replace ──────────────────────────────────────────
@@ -1779,8 +1882,13 @@ function dlFillDown() {
   dlPushUndo();
   for (let c = sel.c1; c <= sel.c2; c++) {
     const src = DL.data[`${sel.r1}-${c}`];
-    for (let r = sel.r1 + 1; r <= sel.r2; r++)
-      DL.data[`${r}-${c}`] = src ? {...src} : undefined;
+    for (let r = sel.r1 + 1; r <= sel.r2; r++) {
+      if (src) {
+        DL.data[`${r}-${c}`] = {...src};
+      } else {
+        delete DL.data[`${r}-${c}`];  // ✅ BUG FIX: delete instead of assigning undefined
+      }
+    }
   }
   dlRenderTable();
   dlShowToast('Filled down');
@@ -1826,8 +1934,13 @@ function dlFillRight() {
   dlPushUndo();
   for (let r = sel.r1; r <= sel.r2; r++) {
     const src = DL.data[`${r}-${sel.c1}`];
-    for (let c = sel.c1 + 1; c <= sel.c2; c++)
-      DL.data[`${r}-${c}`] = src ? {...src} : undefined;
+    for (let c = sel.c1 + 1; c <= sel.c2; c++) {
+      if (src) {
+        DL.data[`${r}-${c}`] = {...src};
+      } else {
+        delete DL.data[`${r}-${c}`];  // ✅ BUG FIX: delete instead of assigning undefined
+      }
+    }
   }
   dlRenderTable();
   dlShowToast('Filled right');
