@@ -5,6 +5,116 @@
 const calcVars = {};
 let calcRowCount = 0;
 let calcChartInstance = null;
+let graphRange = { xMin: -20, xMax: 20, yMin: null, yMax: null };
+let graphExpressions = [];
+let _graphRafId = null;
+
+function _graphGeneratePoints(compiledCode) {
+    const { xMin, xMax } = graphRange;
+    const N = 400;
+    const step = (xMax - xMin) / N;
+    const pts = [];
+    const scope = Object.assign({}, calcVars);
+    for (let i = 0; i <= N; i++) {
+        scope.x = xMin + i * step;
+        try {
+            const y = compiledCode.evaluate(scope);
+            if (typeof y === 'number' && isFinite(y)) pts.push({ x: scope.x, y });
+        } catch(e) {}
+    }
+    return pts;
+}
+
+function _graphBuildOptions() {
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        parsing: false,
+        normalized: true,
+        scales: {
+            x: {
+                type: 'linear', position: 'bottom',
+                min: graphRange.xMin, max: graphRange.xMax,
+                grid: { color: 'rgba(255,255,255,0.07)' },
+                ticks: { color: '#888', maxTicksLimit: 10, callback: v => +v.toFixed(2) },
+                border: { color: 'rgba(255,255,255,0.2)' }
+            },
+            y: {
+                type: 'linear', position: 'left',
+                ...(graphRange.yMin !== null ? { min: graphRange.yMin } : {}),
+                ...(graphRange.yMax !== null ? { max: graphRange.yMax } : {}),
+                grid: { color: 'rgba(255,255,255,0.07)' },
+                ticks: { color: '#888', maxTicksLimit: 8, callback: v => +v.toFixed(2) },
+                border: { color: 'rgba(255,255,255,0.2)' }
+            }
+        },
+        plugins: {
+            legend: { labels: { color: '#e2e8f0', font: { family: "'JetBrains Mono',monospace", size: 11 } } },
+            tooltip: {
+                mode: 'index', intersect: false,
+                callbacks: {
+                    title: items => 'x = ' + (+items[0].parsed.x.toFixed(4)),
+                    label: item  => item.dataset.label.split('=')[0].trim() + ' = ' + (+item.parsed.y.toFixed(6))
+                }
+            },
+            zoom: {
+                zoom: { wheel: { enabled: true, speed: 0.1 }, pinch: { enabled: true }, mode: 'xy', onZoomComplete: _graphOnViewChange },
+                pan:  { enabled: true, mode: 'xy', threshold: 5, onPanComplete: _graphOnViewChange }
+            }
+        }
+    };
+}
+
+function _graphRefreshAllData() {
+    if (!calcChartInstance) return;
+    calcChartInstance.data.datasets.forEach((ds, idx) => {
+        if (graphExpressions[idx]) ds.data = _graphGeneratePoints(graphExpressions[idx].compiledCode);
+    });
+    const opts = calcChartInstance.options;
+    opts.scales.x.min = graphRange.xMin;
+    opts.scales.x.max = graphRange.xMax;
+    if (graphRange.yMin !== null) opts.scales.y.min = graphRange.yMin;
+    else delete opts.scales.y.min;
+    if (graphRange.yMax !== null) opts.scales.y.max = graphRange.yMax;
+    else delete opts.scales.y.max;
+    calcChartInstance.update('none');
+    _graphSyncInputs();
+}
+
+function _graphSyncInputs() {
+    const s = (id, v) => { const el=document.getElementById(id); if(el && document.activeElement!==el) el.value=(v??''); };
+    s('graph-xmin', graphRange.xMin); s('graph-xmax', graphRange.xMax);
+    s('graph-ymin', graphRange.yMin??''); s('graph-ymax', graphRange.yMax??'');
+}
+
+function graphApplyRange() {
+    const g = id => document.getElementById(id)?.value.trim();
+    const xn=parseFloat(g('graph-xmin')), xx=parseFloat(g('graph-xmax'));
+    if (!isNaN(xn)&&!isNaN(xx)&&xn<xx) { graphRange.xMin=xn; graphRange.xMax=xx; }
+    const yn=g('graph-ymin'), yx=g('graph-ymax');
+    graphRange.yMin=(yn!==''&&!isNaN(+yn))?+yn:null;
+    graphRange.yMax=(yx!==''&&!isNaN(+yx))?+yx:null;
+    _graphRefreshAllData();
+}
+
+function _graphOnViewChange({ chart }) {
+    if (_graphRafId) cancelAnimationFrame(_graphRafId);
+    _graphRafId = requestAnimationFrame(() => {
+        graphRange.xMin = chart.scales.x.min;
+        graphRange.xMax = chart.scales.x.max;
+        if (graphRange.yMin !== null || graphRange.yMax !== null) {
+            graphRange.yMin = chart.scales.y.min;
+            graphRange.yMax = chart.scales.y.max;
+        }
+        chart.data.datasets.forEach((ds, idx) => {
+            if (graphExpressions[idx]) ds.data = _graphGeneratePoints(graphExpressions[idx].compiledCode);
+        });
+        chart.update('none');
+        _graphSyncInputs();
+        _graphRafId = null;
+    });
+}
 
 // ── CUSTOM FUNCTIONS STORAGE ──
 let customFunctions = JSON.parse(localStorage.getItem('sym_custom_functions') || '[]');
@@ -151,6 +261,75 @@ function calcEvalRow(i) {
     return;
   }
 
+  // ── LaTeX input detection + evaluation ──
+  if (val.includes('\\')) {
+    // 1) Try special forms: \sum, \prod, \int, \frac{d}{dx}
+    let evaluated = null;
+    let rawResult = null;
+    const special = evalLatexSpecial(val, calcVars);
+    if (special !== null) {
+      rawResult = special;
+      evaluated = calcFmt(special);
+    }
+    // 2) Fallback: general latexToMathJS conversion
+    if (evaluated === null) {
+      const mathExpr = latexToMathJS(val);
+      if (mathExpr) {
+        try {
+          rawResult = math.evaluate(mathExpr, calcVars);
+          evaluated = calcFmt(rawResult);
+          // Variable assignment
+          if (val.includes('=') && val.split('=')[0].trim()) {
+            const varName = val.split('=')[0].trim().replace(/\\/g,'');
+            if (/^[a-zA-Z_]\w*$/.test(varName)) {
+              calcVars[varName] = rawResult;
+              calcRenderBadges();
+            }
+          }
+        } catch(e) { evaluated = null; }
+      }
+    }
+
+    // Result display: numeric answer + visual preview side by side
+    resEl.innerHTML = '';
+    resEl.className = 'calc-res ok sym';
+
+    if (evaluated !== null) {
+      // Numeric answer (green, bold)
+      const numSpan = document.createElement('span');
+      numSpan.textContent = evaluated;
+      numSpan.style.cssText = 'color:var(--accent2,#34d399); font-weight:700; margin-right:8px; font-size:1em;';
+      resEl.appendChild(numSpan);
+    }
+
+    // Visual LaTeX preview
+    const ltxHTML = latexToVisualHTML(val);
+    if (ltxHTML) {
+      const previewSpan = document.createElement('span');
+      previewSpan.innerHTML = ltxHTML;
+      previewSpan.style.cssText = 'font-size:0.88em; opacity:0.7;';
+      resEl.appendChild(previewSpan);
+    }
+
+    if (!evaluated && !ltxHTML) {
+      resEl.textContent = 'Error';
+      resEl.className = 'calc-res err';
+    }
+
+    const ins = document.getElementById('calc-ins-' + i);
+    if (ins) {
+      if (evaluated !== null) {
+        ins.dataset.val = evaluated;
+        ins.style.display = 'flex';
+      } else {
+        ins.style.display = 'none';
+      }
+    }
+    const visS = document.getElementById('calc-vis-' + i);
+    if (visS) visS.classList.add('visible');
+    return;
+  }
+
   // Symbolic math check (diff, integrate, solve, factor, expand)
   if (typeof calcSymbolic === 'function') {
     const symResult = calcSymbolic(val);
@@ -266,133 +445,91 @@ function calcDrawGraph(i) {
     const inp = document.getElementById('calc-inp-'+i).value.trim();
     if(!inp) return;
 
+    const COLORS = ['#a78bfa','#34d399','#f87171','#60a5fa','#fbbf24','#f472b6',
+        '#38bdf8','#4ade80','#fb923c','#e879f9','#a3e635','#22d3ee',
+        '#f43f5e','#818cf8','#2dd4bf','#facc15','#c084fc','#86efac'];
+
     let canvasWrap = document.getElementById('graphCanvasWrap');
     if(!canvasWrap) {
         canvasWrap = document.createElement('div');
         canvasWrap.id = 'graphCanvasWrap';
-        canvasWrap.style.cssText = [
-                                      "width:100%",
-                                      "height:320px",
-                                      "min-height:280px",
-                                      "padding:10px",
-                                      "background:var(--surf2)",
-                                      "border-radius:8px",
-                                      "margin-top:15px",
-                                      "border:1px solid var(--border)",
-                                      "position:relative",
-                                      "box-sizing:border-box",
-                                      "overflow:hidden"
-                                    ].join(';');
+        canvasWrap.style.cssText = 'width:100%;padding:8px 10px;background:var(--surf2);border-radius:8px;margin-top:15px;border:1px solid var(--border);box-sizing:border-box;';
+
+        // ── Range bar ──
+        const rangeBar = document.createElement('div');
+        rangeBar.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-bottom:7px;';
+
+        const mkInp = (id, ph, title) => {
+            const el = document.createElement('input');
+            el.id=id; el.type='number'; el.placeholder=ph; el.title=title; el.step='any';
+            el.style.cssText='width:68px;background:var(--surf,#1e1e2e);color:var(--fg,#e2e8f0);border:1px solid var(--border,#333);border-radius:5px;padding:3px 5px;font-size:11px;font-family:JetBrains Mono,monospace;box-sizing:border-box;';
+            el.addEventListener('keydown', e => { if(e.key==='Enter') graphApplyRange(); });
+            return el;
+        };
+        const mkLbl = t => { const s=document.createElement('span'); s.textContent=t; s.style.cssText='font-size:10px;color:var(--muted,#888);font-family:JetBrains Mono,monospace;'; return s; };
+
+        rangeBar.append(
+            mkLbl('x:'), mkInp('graph-xmin','xMin','X min'), mkLbl('→'), mkInp('graph-xmax','xMax','X max'),
+            mkLbl(' y:'), mkInp('graph-ymin','yMin (auto)','Y min (blank=auto)'), mkLbl('→'), mkInp('graph-ymax','yMax (auto)','Y max (blank=auto)')
+        );
+
+        const applyBtn = document.createElement('button');
+        applyBtn.textContent='↵ Apply'; applyBtn.className='hbtn'; applyBtn.style.cssText='font-size:10px;padding:3px 8px;';
+        applyBtn.onclick = graphApplyRange;
+
+        const resetBtn = document.createElement('button');
+        resetBtn.textContent='⟳'; resetBtn.className='hbtn'; resetBtn.title='Reset range'; resetBtn.style.cssText='font-size:12px;padding:2px 7px;';
+        resetBtn.onclick = () => { graphRange={xMin:-20,xMax:20,yMin:null,yMax:null}; _graphRefreshAllData(); if(calcChartInstance) calcChartInstance.resetZoom(); };
+
+        const fsBtn = document.createElement('button');
+        fsBtn.innerHTML='⛶'; fsBtn.className='hbtn'; fsBtn.title='Fullscreen'; fsBtn.style.cssText='font-size:14px;padding:2px 7px;margin-left:auto;';
+        fsBtn.onclick = toggleGraphFullscreen;
+
         const closeBtn = document.createElement('button');
-        closeBtn.textContent = '✕ Clear All';
-        closeBtn.className = 'hbtn';
-        closeBtn.style = 'position:absolute;right:16px;top:8px;font-size:10px;';
+        closeBtn.textContent='✕'; closeBtn.className='hbtn'; closeBtn.title='Clear graph'; closeBtn.style.cssText='font-size:11px;';
         closeBtn.onclick = hideGraph;
-        canvasWrap.style.position = 'relative';
-        canvasWrap.appendChild(closeBtn);
-        let canvas = document.createElement('canvas');
+
+        rangeBar.append(applyBtn, resetBtn, fsBtn, closeBtn);
+        canvasWrap.appendChild(rangeBar);
+
+        const canvasBox = document.createElement('div');
+        canvasBox.style.cssText='position:relative;height:300px;';
+        const canvas = document.createElement('canvas');
         canvas.id = 'graphCanvas';
-        canvasWrap.appendChild(canvas);
+        canvasBox.appendChild(canvas);
+        canvasWrap.appendChild(canvasBox);
         document.getElementById('calc-rows').after(canvasWrap);
     }
     canvasWrap.style.display = 'block';
 
-    // Colors list
-    const COLORS = [
-    '#a78bfa', // Purple
-    '#34d399', // Green
-    '#f87171', // Red
-    '#60a5fa', // Blue
-    '#fbbf24', // Amber
-    '#f472b6', // Pink
-    '#38bdf8', // Sky Blue
-    '#4ade80', // Light Green
-    '#fb923c', // Orange
-    '#e879f9', // Fuchsia
-    '#a3e635', // Lime
-    '#22d3ee', // Cyan
-    '#f43f5e', // Rose
-    '#818cf8', // Indigo
-    '#2dd4bf', // Teal
-    '#facc15', // Yellow
-    '#c084fc', // Violet
-    '#86efac', // Mint
-    '#fda4af', // Light Red
-    '#93c5fd', // Light Blue
-    '#6ee7b7', // Light Teal
-    '#fcd34d', // Light Amber
-    '#d8b4fe', // Light Purple
-    '#f9a8d4', // Light Pink
-];
-
     try {
         let cleanExpr = inp.toLowerCase().replace(/(\d)(x)/gi, '$1*$2');
         const compiledCode = math.compile(cleanExpr);
-
-        let labels = [];
-        let dataPoints = [];
-        for (let x = -10; x <= 10; x += 0.5) {
-            let y = compiledCode.evaluate({ ...calcVars, x: x });
-            if (typeof y === 'number' && isFinite(y)) {
-                labels.push(x);
-                dataPoints.push(y);
-            }
-        }
+        const dataPoints = _graphGeneratePoints(compiledCode);
 
         const newDataset = {
             label: 'f(x) = ' + inp,
             data: dataPoints,
             borderColor: COLORS[(calcChartInstance ? calcChartInstance.data.datasets.length : 0) % COLORS.length],
             backgroundColor: 'transparent',
-            borderWidth: 2.5,
-            fill: false,
-            tension: 0.4,
-            pointRadius: 0,
-            pointHoverRadius: 6
+            borderWidth: 2, fill: false, tension: 0,
+            pointRadius: 0, pointHoverRadius: 4, spanGaps: false,
         };
 
+        graphExpressions.push({ expr: inp, compiledCode });
+
         if(calcChartInstance) {
-            // පරන chart එකට නව dataset add කිරීම
             calcChartInstance.data.datasets.push(newDataset);
-            calcChartInstance.update();
+            calcChartInstance.update('none');
             if(typeof toast === 'function') toast('Added: f(x) = ' + inp, 'success');
         } else {
-            // අලුත් chart හදීම
             calcChartInstance = new Chart(
-                document.getElementById('graphCanvas').getContext('2d'), {
-                type: 'line',
-                data: { labels: labels, datasets: [newDataset] },
-                options: {
-                  responsive: true,
-                  maintainAspectRatio: false,
-                  resizeDelay: 100,
-                  onResize: (chart, size) => {
-                    chart.canvas.style.width = '100%';
-                    chart.canvas.style.height = '100%';
-                  },
-                  scales: {
-                      x: { grid:{color:'rgba(255,255,255,0.05)'}, ticks:{color:'#888'} },
-                      y: { grid:{color:'rgba(255,255,255,0.05)'}, ticks:{color:'#888'} }
-                  },
-                  plugins: {
-                      legend: { labels:{ color:'#e2e8f0', font:{family:"'JetBrains Mono',monospace"} } },
-                      tooltip: { mode:'index', intersect:false },
-                      zoom: {
-                          zoom: {
-                              wheel: { enabled: true },      // mouse scroll zoom
-                              pinch: { enabled: true },       // mobile pinch zoom
-                              mode: 'xy'
-                          },
-                              pan: {
-                                  enabled: true,
-                                  mode: 'xy'
-                              }
-                          }
-                      }
-                  }
-            });
+                document.getElementById('graphCanvas').getContext('2d'),
+                { type: 'line', data: { datasets: [newDataset] }, options: _graphBuildOptions() }
+            );
             if(typeof toast === 'function') toast('Graph drawn!', 'success');
         }
+        _graphSyncInputs();
 
     } catch(e) {
         if(typeof toast === 'function') toast('Cannot draw graph. Check expression.', 'error');
@@ -404,7 +541,131 @@ function hideGraph() {
     if(canvasWrap) {
         canvasWrap.style.display = 'none';
         if(calcChartInstance){ calcChartInstance.destroy(); calcChartInstance = null; }
+        graphExpressions = [];
+        graphRange = { xMin: -20, xMax: 20, yMin: null, yMax: null };
+        if(_graphRafId){ cancelAnimationFrame(_graphRafId); _graphRafId = null; }
         if(typeof toast === 'function') toast('Graph cleared', 'info');
+    }
+}
+
+// ── GRAPH FULLSCREEN ──────────────────────────────────────────────────────
+
+// Rebuild chart on a given canvas element, reusing current datasets + options
+function _graphRebuildOn(canvasEl) {
+    const datasets = calcChartInstance ? calcChartInstance.data.datasets.slice() : [];
+    if(calcChartInstance){ calcChartInstance.destroy(); calcChartInstance = null; }
+    calcChartInstance = new Chart(canvasEl.getContext('2d'), {
+        type: 'line',
+        data: { datasets },
+        options: _graphBuildOptions()
+    });
+}
+
+function toggleGraphFullscreen() {
+    const wrap = document.getElementById('graphCanvasWrap');
+    if (!wrap) return;
+
+    let overlay = document.getElementById('graphFullscreenOverlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'graphFullscreenOverlay';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#0d0d14;display:flex;flex-direction:column;padding:12px 16px;box-sizing:border-box;gap:8px;';
+
+        // ── Header ──
+        const hdr = document.createElement('div');
+        hdr.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:6px;flex-shrink:0;';
+
+        const title = document.createElement('span');
+        title.textContent = '📈 Graph';
+        title.style.cssText = 'color:var(--accent,#a78bfa);font-family:JetBrains Mono,monospace;font-size:13px;font-weight:700;letter-spacing:1px;margin-right:6px;';
+
+        // Range inputs (mirrored — same ids, same graphApplyRange fn)
+        const mkInp = (id, ph, tip) => {
+            const el = document.createElement('input');
+            el.id=id+'_fs'; el.type='number'; el.placeholder=ph; el.title=tip; el.step='any';
+            el.style.cssText='width:68px;background:var(--surf,#1e1e2e);color:var(--fg,#e2e8f0);border:1px solid var(--border,#333);border-radius:5px;padding:3px 5px;font-size:11px;font-family:JetBrains Mono,monospace;box-sizing:border-box;';
+            el.addEventListener('keydown', e => { if(e.key==='Enter') _graphApplyRangeFs(); });
+            return el;
+        };
+        const mkLbl = t => { const s=document.createElement('span'); s.textContent=t; s.style.cssText='font-size:10px;color:var(--muted,#888);font-family:JetBrains Mono,monospace;'; return s; };
+
+        const applyBtn = document.createElement('button');
+        applyBtn.textContent='↵ Apply'; applyBtn.className='hbtn'; applyBtn.style.cssText='font-size:10px;padding:3px 8px;';
+        applyBtn.onclick = _graphApplyRangeFs;
+
+        const resetBtn = document.createElement('button');
+        resetBtn.textContent='⟳ Reset'; resetBtn.className='hbtn'; resetBtn.style.cssText='font-size:10px;';
+        resetBtn.onclick = () => { graphRange={xMin:-20,xMax:20,yMin:null,yMax:null}; _graphRefreshAllData(); _graphSyncFsInputs(); if(calcChartInstance) calcChartInstance.resetZoom(); };
+
+        const exitBtn = document.createElement('button');
+        exitBtn.textContent='✕ Exit'; exitBtn.className='hbtn'; exitBtn.style.cssText='font-size:11px;margin-left:auto;';
+        exitBtn.onclick = exitGraphFullscreen;
+
+        hdr.append(title,
+            mkLbl('x:'), mkInp('graph-xmin','xMin','X min'), mkLbl('→'), mkInp('graph-xmax','xMax','X max'),
+            mkLbl(' y:'), mkInp('graph-ymin','yMin(auto)','Y min'), mkLbl('→'), mkInp('graph-ymax','yMax(auto)','Y max'),
+            applyBtn, resetBtn, exitBtn
+        );
+        overlay.appendChild(hdr);
+
+        // ── Canvas area ──
+        const fsWrap = document.createElement('div');
+        fsWrap.id = 'graphFsCanvasWrap';
+        fsWrap.style.cssText = 'flex:1;position:relative;min-height:0;';
+        overlay.appendChild(fsWrap);
+
+        document.body.appendChild(overlay);
+    }
+
+    overlay.style.display = 'flex';
+
+    // Rebuild chart on fullscreen canvas
+    const fsWrap = document.getElementById('graphFsCanvasWrap');
+    fsWrap.innerHTML = '';
+    const fsCanvas = document.createElement('canvas');
+    fsCanvas.id = 'graphCanvasFs';
+    fsWrap.appendChild(fsCanvas);
+    _graphRebuildOn(fsCanvas);
+
+    _graphSyncFsInputs();
+
+    // Esc to exit
+    overlay._escHandler = e => { if(e.key==='Escape') exitGraphFullscreen(); };
+    document.addEventListener('keydown', overlay._escHandler);
+    if(typeof toast === 'function') toast('Fullscreen — Esc to exit', 'info');
+}
+
+// Sync the _fs input fields from current graphRange
+function _graphSyncFsInputs() {
+    const s = (id, v) => { const el=document.getElementById(id+'_fs'); if(el && document.activeElement!==el) el.value=(v??''); };
+    s('graph-xmin', graphRange.xMin); s('graph-xmax', graphRange.xMax);
+    s('graph-ymin', graphRange.yMin??''); s('graph-ymax', graphRange.yMax??'');
+}
+
+// Apply range from fullscreen inputs
+function _graphApplyRangeFs() {
+    const g = id => document.getElementById(id+'_fs')?.value.trim();
+    const xn=parseFloat(g('graph-xmin')), xx=parseFloat(g('graph-xmax'));
+    if(!isNaN(xn)&&!isNaN(xx)&&xn<xx){ graphRange.xMin=xn; graphRange.xMax=xx; }
+    const yn=g('graph-ymin'), yx=g('graph-ymax');
+    graphRange.yMin=(yn!==''&&!isNaN(+yn))?+yn:null;
+    graphRange.yMax=(yx!==''&&!isNaN(+yx))?+yx:null;
+    _graphRefreshAllData();
+    _graphSyncInputs(); // also sync the normal bar
+}
+
+function exitGraphFullscreen() {
+    const overlay = document.getElementById('graphFullscreenOverlay');
+    if(overlay){
+        overlay.style.display = 'none';
+        if(overlay._escHandler){ document.removeEventListener('keydown', overlay._escHandler); overlay._escHandler=null; }
+    }
+
+    // Restore chart back onto the normal canvas
+    const normalCanvas = document.getElementById('graphCanvas');
+    if(normalCanvas) {
+        _graphRebuildOn(normalCanvas);
+        _graphSyncInputs();
     }
 }
 
@@ -535,9 +796,12 @@ function calcInsertVisual(i) {
   const resEl = document.getElementById('calc-res-' + i);
   if (!inp) return;
   const expr = inp.value.trim();
-  const result = resEl ? resEl.textContent : '';
+  const result = resEl ? (resEl.textContent || '') : '';
   if (!expr) return;
-  const html = mathToVisualHTML(expr, result);
+  // LaTeX input නම් directly render කිරීම
+  const html = expr.includes('\\')
+    ? (() => { const h = latexToVisualHTML(expr); return h ? mvWrap(h, result) : null; })()
+    : mathToVisualHTML(expr, result);
   if (!html) {
     if(typeof toast === 'function') toast('Cannot render visual for this expression', 'warn');
     return;
@@ -560,9 +824,268 @@ function calcInsertVisual(i) {
   if(typeof toast === 'function') toast('Math inserted as visual notation ✓', 'success');
 }
 
+
+// ── LATEX SPECIAL EVALUATOR (sum, prod, int, diff) ──────────────────────────
+
+function evalLatexSpecial(latex, scope) {
+  const s = latex.trim();
+
+  // ── \sum / \prod ──
+  const sumM = s.match(/^\\(sum|prod)\s*_\{([a-zA-Z]+)\s*=\s*([^}]+)\}\s*\^\{([^}]+)\}\s*([\s\S]+)$/i)
+             || s.match(/^\\(sum|prod)\s*\^\{([^}]+)\}\s*_\{([a-zA-Z]+)\s*=\s*([^}]+)\}\s*([\s\S]+)$/i);
+  if (sumM) {
+    const op = sumM[1].toLowerCase();
+    let ivar, loTex, hiTex, bodyTex;
+    if (s.match(/^\\(sum|prod)\s*_/i)) {
+      ivar=sumM[2]; loTex=sumM[3]; hiTex=sumM[4]; bodyTex=sumM[5];
+    } else {
+      hiTex=sumM[2]; ivar=sumM[3]; loTex=sumM[4]; bodyTex=sumM[5];
+    }
+    ivar = ivar.trim();
+    let lo, hi;
+    try {
+      lo = Math.round(math.evaluate(latexToMathJS(loTex)||loTex, scope));
+      hi = Math.round(math.evaluate(latexToMathJS(hiTex)||hiTex, scope));
+    } catch(e) { return null; }
+    if (!Number.isFinite(lo)||!Number.isFinite(hi)||Math.abs(hi-lo)>1e5) return null;
+    const bodyMJ = latexToMathJS(bodyTex) || bodyTex;
+    let acc = op==='prod' ? 1 : 0;
+    try {
+      for (let k=lo; k<=hi; k++) {
+        const v = math.evaluate(bodyMJ, {...scope, [ivar]:k});
+        if (!Number.isFinite(v)) return null;
+        op==='prod' ? (acc*=v) : (acc+=v);
+      }
+    } catch(e) { return null; }
+    return acc;
+  }
+
+  // ── \int_{a}^{b} f(x) dx  (5-point Gauss-Legendre) ──
+  const intM = s.match(/^\\int\s*_\{([^}]+)\}\s*\^\{([^}]+)\}\s*([\s\S]+?)\s*(?:\\[,;]?\s*)?d([a-zA-Z])\s*$/i)
+             || s.match(/^\\int\s*\^\{([^}]+)\}\s*_\{([^}]+)\}\s*([\s\S]+?)\s*(?:\\[,;]?\s*)?d([a-zA-Z])\s*$/i);
+  if (intM) {
+    let loTex, hiTex, bodyTex, ivar;
+    if (s.match(/^\\int\s*_/i)) {
+      loTex=intM[1]; hiTex=intM[2]; bodyTex=intM[3]; ivar=intM[4];
+    } else {
+      hiTex=intM[1]; loTex=intM[2]; bodyTex=intM[3]; ivar=intM[4];
+    }
+    let a, b;
+    try {
+      a = math.evaluate(latexToMathJS(loTex)||loTex, scope);
+      b = math.evaluate(latexToMathJS(hiTex)||hiTex, scope);
+    } catch(e) { return null; }
+    if (!Number.isFinite(a)||!Number.isFinite(b)) return null;
+    const bodyMJ = latexToMathJS(bodyTex) || bodyTex;
+    // 5-point Gauss-Legendre nodes & weights
+    const GL = [
+      {t:-0.9061798459,w:0.2369268851},{t:-0.5384693101,w:0.4786286705},
+      {t:0.0,w:0.5688888889},{t:0.5384693101,w:0.4786286705},{t:0.9061798459,w:0.2369268851}
+    ];
+    try {
+      let result=0;
+      const mid=(a+b)/2, half=(b-a)/2;
+      for (const {t,w} of GL) {
+        const x = mid+half*t;
+        const fx = math.evaluate(bodyMJ, {...scope, [ivar]:x});
+        if (!Number.isFinite(fx)) return null;
+        result += w*fx;
+      }
+      return result*half;
+    } catch(e) { return null; }
+  }
+
+  // ── \frac{d}{dx} f(x)  or  \frac{d^n}{dx^n} f(x) ──
+  // Central difference — needs variable value in scope
+  const diffM = s.match(/^\\frac\{d\}\{d([a-zA-Z])\}\s*([\s\S]+)$/i)
+             || s.match(/^\\frac\{d\^(\d+)\}\{d([a-zA-Z])\^\d+\}\s*([\s\S]+)$/i);
+  if (diffM) {
+    let ivar, bodyTex, order=1;
+    if (s.match(/^\\frac\{d\}\{d[a-zA-Z]\}/i)) {
+      ivar=diffM[1]; bodyTex=diffM[2];
+    } else {
+      order=parseInt(diffM[1])||1; ivar=diffM[2]; bodyTex=diffM[3];
+    }
+    const xVal = scope[ivar];
+    if (xVal===undefined||!Number.isFinite(Number(xVal))) return null;
+    const x0=Number(xVal), h=1e-5;
+    const bodyMJ = latexToMathJS(bodyTex)||bodyTex;
+    try {
+      const f = x => math.evaluate(bodyMJ, {...scope,[ivar]:x});
+      let result;
+      if (order===1)      result = (f(x0+h)-f(x0-h))/(2*h);
+      else if (order===2) result = (f(x0+h)-2*f(x0)+f(x0-h))/(h*h);
+      else return null;
+      return Number.isFinite(result) ? result : null;
+    } catch(e) { return null; }
+  }
+
+  return null;
+}
+
+// ── LATEX → MATHJS CONVERTER ────────────────────────────────────────────────
+function latexToMathJS(latex) {
+  if (!latex || !latex.includes("\\")) return null;
+  let s = latex.trim();
+  s = s.replace(/\\left\s*\(/g,"(").replace(/\\right\s*\)/g,")")
+       .replace(/\\left\s*\[/g,"[").replace(/\\right\s*\]/g,"]");
+  for (let pass = 0; pass < 8; pass++)
+    s = s.replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "($1)/($2)");
+  s = s.replace(/\\sqrt\s*\[([^\]]+)\]\s*\{([^{}]*)\}/g, "nthRoot($2,$1)");
+  s = s.replace(/\\sqrt\s*\{([^{}]*)\}/g, "sqrt($1)");
+  s = s.replace(/\\sqrt\s*([a-zA-Z0-9])/g, "sqrt($1)");
+  s = s.replace(/\\cdot/g,"*").replace(/\\times/g,"*").replace(/\\div/g,"/");
+  s = s.replace(/\\pm/g,"+");
+  s = s.replace(/\^\{([^{}]+)\}/g, "^($1)");
+  s = s.replace(/_\{[^{}]*\}/g,"").replace(/_[a-zA-Z0-9]/g,"");
+  const greekMap={alpha:"alpha",beta:"beta",gamma:"gamma",delta:"delta",epsilon:"e",theta:"theta",lambda:"lambda",mu:"mu",pi:"pi",sigma:"sigma",omega:"omega",infty:"Infinity",infinity:"Infinity",partial:"",nabla:""};
+  const fns=["sin","cos","tan","sec","csc","cot","sinh","cosh","tanh","arcsin","arccos","arctan","ln","log","exp","abs","floor","ceil"];
+  s = s.replace(/\\([a-zA-Z]+)/g, (_,name) => { if(greekMap[name]!==undefined) return greekMap[name]; if(fns.includes(name.toLowerCase())) return name.toLowerCase(); return ""; });
+  s = s.replace(/\{([^{}]*)\}/g, "($1)");
+  s = s.replace(/\s+/g," ").trim().replace(/^[+*/]|[+*/]$/g,"").trim();
+  if (!s || s.length < 1) return null;
+  return s;
+}
+
+// ── LATEX PARSER → VISUAL HTML ──────────────────────────────────────────────
+// Converts LaTeX strings like \frac{a}{b}, \sum_{i=0}^n into visual HTML.
+// Returns null if input doesn't look like LaTeX.
+
+function latexToVisualHTML(latex) {
+  let s = latex.trim();
+  if (!s.includes('\\')) return null; // LaTeX නෙමෙයි නම් skip
+
+  // Outer \left( ... \right) / \left[ ... \right] brackets strip
+  s = s.replace(/\\left\s*\(/g, '(').replace(/\\right\s*\)/g, ')')
+       .replace(/\\left\s*\[/g, '[').replace(/\\right\s*\]/g, ']')
+       .replace(/\\left\s*\|/g, '|').replace(/\\right\s*\|/g, '|');
+
+  return ltxNode(s);
+}
+
+// Recursively parse a LaTeX string into HTML
+function ltxNode(s) {
+  s = s.trim();
+  if (!s) return '';
+
+  // ── \frac{num}{den} ──
+  s = s.replace(/\\frac\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)?\})\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)?\})/g, (_, n, d) => {
+    const num = ltxNode(ltxUnbrace(n));
+    const den = ltxNode(ltxUnbrace(d));
+    return `<span class="mv-frac"><span class="mv-num">${num}</span><span class="mv-den">${den}</span></span>`;
+  });
+
+  // ── \sqrt{x} ──
+  s = s.replace(/\\sqrt\s*(\{[^{}]*\})/g, (_, inner) =>
+    `<span class="mv-sqrt"><span class="mv-sqrt-sign">√</span><span class="mv-sqrt-bar">${ltxNode(ltxUnbrace(inner))}</span></span>`);
+
+  // ── \sqrt[n]{x} ──
+  s = s.replace(/\\sqrt\s*\[([^\]]+)\]\s*(\{[^{}]*\})/g, (_, n, inner) =>
+    `<span class="mv-sqrt"><sup class="mv-nroot">${ltxNode(n)}</sup><span class="mv-sqrt-sign">√</span><span class="mv-sqrt-bar">${ltxNode(ltxUnbrace(inner))}</span></span>`);
+
+  // ── \sum / \prod with _{lo}^{hi} or ^{hi}_{lo} (stacked limits) ──
+  s = s.replace(/\\(sum|prod)\s*(?:_(\{[^{}]*\}|[^_\^{}\s]))?(?:\^(\{[^{}]*\}|[^_\^{}\s]))?/g, (_, op, sub, sup) => {
+    const sym = op === 'sum' ? 'Σ' : 'Π';
+    const lo  = sub ? ltxNode(ltxUnbrace(sub)) : '';
+    const hi  = sup ? ltxNode(ltxUnbrace(sup)) : '';
+    const limits = (lo || hi)
+      ? `<span class="mv-bigop-limits"><sup>${hi}</sup><sub>${lo}</sub></span>` : '';
+    return `<span class="mv-bigop"><span class="mv-bigop-sym">${sym}</span>${limits}</span>`;
+  });
+  // Also handle reversed ^{hi}_{lo}
+  s = s.replace(/\\(sum|prod)\s*(?:\^(\{[^{}]*\}|[^_\^{}\s]))?(?:_(\{[^{}]*\}|[^_\^{}\s]))?/g, (_, op, sup, sub) => {
+    // already replaced above if both present; only fires if not yet replaced
+    if (!_.includes('mv-bigop')) {
+      const sym = op === 'sum' ? 'Σ' : 'Π';
+      const lo  = sub ? ltxNode(ltxUnbrace(sub)) : '';
+      const hi  = sup ? ltxNode(ltxUnbrace(sup)) : '';
+      const limits = (lo || hi)
+        ? `<span class="mv-bigop-limits"><sup>${hi}</sup><sub>${lo}</sub></span>` : '';
+      return `<span class="mv-bigop"><span class="mv-bigop-sym">${sym}</span>${limits}</span>`;
+    }
+    return _;
+  });
+
+  // ── \int / \iint / \iiint with limits ──
+  s = s.replace(/\\(iiint|iint|int)\s*(?:_(\{[^{}]*\}|[^_\^{}\s]))?(?:\^(\{[^{}]*\}|[^_\^{}\s]))?/g, (_, op, sub, sup) => {
+    const sym = op === 'iiint' ? '∭' : op === 'iint' ? '∬' : '∫';
+    const lo = sub ? ltxNode(ltxUnbrace(sub)) : '';
+    const hi = sup ? ltxNode(ltxUnbrace(sup)) : '';
+    const limits = (lo || hi)
+      ? `<span class="mv-int-limits"><sup>${hi}</sup><sub>${lo}</sub></span>` : '';
+    return `<span class="mv-integral"><span class="mv-int-sign">${sym}</span>${limits}</span>`;
+  });
+
+  // ── \lim_{x \to a} ──
+  s = s.replace(/\\lim\s*_(\{[^{}]*\})/g, (_, sub) => {
+    const inner = ltxUnbrace(sub).replace(/\\to/g, '→').replace(/\\infty/g, '∞');
+    return `<span class="mv-lim"><span class="mv-lim-word">lim</span><sub class="mv-lim-sub">${ltxNode(inner)}</sub></span>`;
+  });
+
+  // ── \log_{b} ──
+  s = s.replace(/\\log\s*_(\{[^{}]*\}|[^_\^{}\s])/g, (_, b) =>
+    `<span class="mv-func">log<sub>${ltxNode(ltxUnbrace(b))}</sub></span>`);
+
+  // ── Trig & named functions: \sin \cos \tan etc. ──
+  s = s.replace(/\\(sin|cos|tan|sec|csc|cot|sinh|cosh|tanh|arcsin|arccos|arctan|ln|exp|det|max|min|gcd|lcm)\b/g,
+    (_, fn) => `<span class="mv-func">${fn}</span>`);
+
+  // ── \left| ... \right| → absolute value ──
+  s = s.replace(/\|([^|]+)\|/g, (_, inner) =>
+    `<span class="mv-abs"><span class="mv-bar">|</span>${ltxNode(inner)}<span class="mv-bar">|</span></span>`);
+
+  // ── x^{exp} or x^e (superscript) ──
+  s = s.replace(/(\S+)\^\{([^{}]+)\}/g, (_, base, exp) =>
+    `${ltxNode(base)}<sup class="mv-sup">${ltxNode(exp)}</sup>`);
+  s = s.replace(/([a-zA-Z0-9])\^([a-zA-Z0-9])/g, (_, base, exp) =>
+    `${base}<sup class="mv-sup">${exp}</sup>`);
+
+  // ── x_{sub} (subscript) ──
+  s = s.replace(/([a-zA-Z0-9])\{([^{}]+)\}/g, (_, base, sub) =>
+    `${base}<sub>${ltxNode(sub)}</sub>`);
+  s = s.replace(/([a-zA-Z0-9])_([a-zA-Z0-9])/g, (_, base, sub) =>
+    `${base}<sub>${sub}</sub>`);
+
+  // ── Greek letters ──
+  const greek = {
+    alpha:'α',beta:'β',gamma:'γ',delta:'δ',epsilon:'ε',zeta:'ζ',eta:'η',theta:'θ',
+    iota:'ι',kappa:'κ',lambda:'λ',mu:'μ',nu:'ν',xi:'ξ',pi:'π',rho:'ρ',sigma:'σ',
+    tau:'τ',upsilon:'υ',phi:'φ',chi:'χ',psi:'ψ',omega:'ω',
+    Gamma:'Γ',Delta:'Δ',Theta:'Θ',Lambda:'Λ',Xi:'Ξ',Pi:'Π',Sigma:'Σ',
+    Upsilon:'Υ',Phi:'Φ',Psi:'Ψ',Omega:'Ω',
+    infty:'∞',infinity:'∞',nabla:'∇',partial:'∂',
+    cdot:'·',times:'×',div:'÷',pm:'±',mp:'∓',
+    leq:'≤',geq:'≥',neq:'≠',approx:'≈',equiv:'≡',
+    to:'→',rightarrow:'→',leftarrow:'←',Rightarrow:'⇒',Leftarrow:'⟸',
+    forall:'∀',exists:'∃',in:'∈',notin:'∉',subset:'⊂',subseteq:'⊆',
+    cup:'∪',cap:'∩',emptyset:'∅',
+  };
+  s = s.replace(/\\([a-zA-Z]+)/g, (match, name) => greek[name] || match);
+
+  // ── Remove stray braces ──
+  s = s.replace(/\{([^{}]*)\}/g, (_, inner) => ltxNode(inner));
+
+  return s;
+}
+
+// Strip outer { } braces
+function ltxUnbrace(s) {
+  s = s.trim();
+  if (s.startsWith('{') && s.endsWith('}')) return s.slice(1, -1).trim();
+  return s;
+}
+
+// ── END LATEX PARSER ─────────────────────────────────────────────────────────
+
 function mathToVisualHTML(expr, result) {
   const e = expr.trim();
   if (!document.getElementById('mv-styles')) injectMVStyles();
+
+  // ── LaTeX input check (starts with \ or contains \frac, \sum etc.) ──
+  if (e.includes('\\')) {
+    const ltxHTML = latexToVisualHTML(e);
+    if (ltxHTML) return mvWrap(ltxHTML, result);
+  }
 
   // √ sqrt(x)
   const sqrtM = e.match(/^sqrt\((.+)\)$/i);
