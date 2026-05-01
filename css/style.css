@@ -55,7 +55,7 @@ body{
 }
 .tbtn:hover{background:var(--btn-h);color:var(--text);border-color:var(--border)}
 .tbtn.on{background:var(--accent);color:#fff;border-color:var(--accent)}
-.tsel{
+.tsel , .hsel{
   background:var(--btn);border:1px solid var(--border);color:var(--text);
   border-radius:5px;padding:4px 6px;font-size:11px;cursor:pointer;outline:none;
   font-family:'Syne',sans-serif
@@ -288,4 +288,11 @@ body{
   font-style: italic;
   font-size: 12px;
   text-align: left;
+}
+
+#graphCanvasWrap canvas {
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100%;
 }
