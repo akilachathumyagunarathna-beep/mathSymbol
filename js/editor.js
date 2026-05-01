@@ -475,3 +475,35 @@ function clearAll(){
   if(!ed.innerText.trim())return;
   if(confirm('Clear everything?')){ed.innerHTML='';updateStats();setAct('Cleared');}
 }
+
+// ── EXPORT TO PDF ──
+
+function exportToPDF() {
+    const element = document.getElementById('ed'); // Editor එකේ div එක
+    
+    // PDF එකේ පෙනුම සැකසීම (Options)
+    const opt = {
+        margin:       [15, 15, 15, 15], // පත්‍රයේ මායිම්
+        filename:     'SymbolWriter_Document.pdf',
+        image:        { type: 'jpeg', quality: 0.98 },
+        html2canvas:  { scale: 2, useCORS: true }, // පැහැදිලි බව වැඩි කිරීමට
+        jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    };
+
+    // Export කිරීමේදී background color එක සහ text color එක නිවැරදිව තබා ගැනීමට
+    // (Dark mode එකේ ඉන්නවා නම් PDF එක සුදු පාටට හැරවීම වඩාත් සුදුසුයි)
+    const isDarkMode = document.body.classList.contains('dark-theme'); // ඔයාගේ theme එක බලන්න
+    
+    // තාවකාලිකව editor එකේ style එක වෙනස් කිරීම (ප්‍රින්ට් එකට ලස්සන වෙන්න)
+    element.style.padding = "20px";
+    element.style.boxShadow = "none";
+    element.style.border = "none";
+
+    // PDF එක සෑදීම
+    html2pdf().set(opt).from(element).save().then(() => {
+        // පස්සේ ආයේ තිබ්බ විදිහටම සකස් කිරීම
+        element.style.padding = "";
+        element.style.boxShadow = "";
+        element.style.border = "";
+    });
+}
